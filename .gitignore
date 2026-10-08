@@ -14,6 +14,8 @@ node_modules/
 **/node_modules/
 .next/
 **/.next/
+.open-next/
+**/.open-next/
 out/
 
 *.sqlite
