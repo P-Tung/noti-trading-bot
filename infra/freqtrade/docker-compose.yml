@@ -1,0 +1,12 @@
+services:
+  freqtrade:
+    image: freqtradeorg/freqtrade:stable
+    restart: unless-stopped
+    command: >-
+      trade
+      --config /freqtrade/user_data/config.json
+      --strategy-path /freqtrade/user_data/strategies
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./user_data:/freqtrade/user_data

@@ -1,0 +1,2 @@
+-- Trade V1 does not seed market, account, or decision data.
+-- Paper records are created by the Trade Brain after the schema is applied.
