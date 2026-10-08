@@ -5,6 +5,7 @@ from typing import Protocol
 from uuid import uuid4
 
 from trade_brain.contracts import MarketSnapshot
+from trade_brain.configuration import TradeBrainConfig
 from trade_brain.orchestration import DecisionCycleResult
 
 
@@ -19,6 +20,12 @@ class SnapshotStore(Protocol):
 
     def list_snapshots(self, limit: int = 50) -> list[MarketSnapshot]:
         """Return recent snapshots in descending decision-time order."""
+
+    def load_config(self) -> TradeBrainConfig | None:
+        """Return the active server-side configuration, if one exists."""
+
+    def save_config(self, config: TradeBrainConfig) -> None:
+        """Persist the active server-side configuration."""
 
 
 class DecisionHistoryStore(Protocol):
@@ -37,6 +44,15 @@ class InMemorySnapshotStore:
     def __init__(self) -> None:
         self._snapshots: dict[str, MarketSnapshot] = {}
         self._decision_history: list[dict[str, object]] = []
+        self._config: TradeBrainConfig | None = None
+
+    def load_config(self) -> TradeBrainConfig | None:
+        """Return a copy of the local runtime configuration."""
+        return self._config.model_copy(deep=True) if self._config is not None else None
+
+    def save_config(self, config: TradeBrainConfig) -> None:
+        """Store a validated runtime configuration for local use."""
+        self._config = config.model_copy(deep=True)
 
     def save_snapshot(self, snapshot: MarketSnapshot) -> None:
         if snapshot.snapshot_id in self._snapshots:

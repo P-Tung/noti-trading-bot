@@ -15,6 +15,7 @@ from trade_brain.binance import BinancePublicClient
 from trade_brain.backtest import BacktestCase, run_backtest
 from trade_brain.claude import ClaudeSelector
 from trade_brain.collector import PublicSnapshotCollector
+from trade_brain.configuration import TradeBrainConfig
 from trade_brain.decision_worker import DecisionWorkerConfig, _configured_mode, _configured_symbols, run_decision_once
 from trade_brain.contracts import ClaudeDecision, PaperMode, Profile, QualityStatus, StrictModel, TradeCandidate
 from trade_brain.orchestration import CandidateRiskInput, DecisionSelector, run_decision_cycle
@@ -121,6 +122,10 @@ def create_app(
 ) -> FastAPI:
     """Create the API with an injectable snapshot store for tests."""
     snapshot_store = store or _build_store()
+    load_config = getattr(snapshot_store, "load_config", None)
+    runtime_config = load_config() if callable(load_config) else None
+    if runtime_config is None:
+        runtime_config = TradeBrainConfig.defaults()
     active_paper_engine = paper_engine or PaperTradingEngine()
     notified_report_keys: set[tuple[str, int, str]] = set()
     evaluation_lock = asyncio.Lock()
@@ -153,6 +158,22 @@ def create_app(
                 for snapshot in snapshot_store.list_snapshots(limit)
             ]
         }
+
+    @service.get("/v1/config")
+    async def get_config() -> dict[str, object]:
+        """Return editable research settings, never credentials."""
+        return {"config": runtime_config.model_dump(mode="json")}
+
+    @service.put("/v1/config")
+    async def update_config(request: TradeBrainConfig) -> dict[str, object]:
+        """Persist validated research settings for future PAPER cycles."""
+        nonlocal runtime_config
+        saver = getattr(snapshot_store, "save_config", None)
+        if not callable(saver):
+            raise HTTPException(status_code=503, detail="Config store chưa được cấu hình.")
+        saver(request)
+        runtime_config = request
+        return {"status": "ok", "config": runtime_config.model_dump(mode="json")}
 
     @service.get("/v1/decisions/recent")
     async def list_recent_decisions(limit: int = 20) -> dict[str, object]:
@@ -214,7 +235,12 @@ def create_app(
                     active_selector,
                     active_client,
                     active_paper_engine,
-                    config=DecisionWorkerConfig(paper_mode=_configured_mode()),
+                    config=DecisionWorkerConfig(
+                        equity_usdt=runtime_config.initial_equity_usdt,
+                        available_margin_usdt=runtime_config.initial_equity_usdt,
+                        paper_mode=runtime_config.paper_mode,
+                    ),
+                    brain_config=runtime_config,
                     notifier=active_notifier,
                     notified_report_keys=notified_report_keys,
                 )

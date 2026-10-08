@@ -13,7 +13,7 @@ from trade_brain.contracts import (
     QualityStatus,
     TradeCandidate,
 )
-from trade_brain.risk import CandidateStatistics, RiskContext, RiskResult, evaluate_candidate_risk
+from trade_brain.risk import CandidateStatistics, POLICIES, RiskContext, RiskPolicy, RiskResult, evaluate_candidate_risk
 from trade_brain.validation import DecisionValidationError, validate_decision
 
 
@@ -58,9 +58,11 @@ async def run_decision_cycle(
     candidates: list[TradeCandidate],
     risk_inputs: dict[str, CandidateRiskInput],
     selector: DecisionSelector | ClaudeSelector,
+    policies: dict[Profile, RiskPolicy] | None = None,
 ) -> DecisionCycleResult:
     """Apply risk gates, call Claude, then validate every decision independently."""
     risk_results: dict[str, RiskResult] = {}
+    active_policies = policies or POLICIES
     gated_candidates: list[TradeCandidate] = []
     for candidate in candidates:
         if snapshot.quality_status in {QualityStatus.INVALID, QualityStatus.AMBIGUOUS}:
@@ -88,6 +90,7 @@ async def run_decision_cycle(
                 risk_input.quantity_step,
                 risk_input.minimum_quantity,
                 risk_input.price_tick,
+                policy=active_policies[candidate.profile],
             )
             risk_results[candidate.candidate_id] = risk_result
             gated_candidate = candidate.model_copy(update={"eligible": risk_result.allowed})

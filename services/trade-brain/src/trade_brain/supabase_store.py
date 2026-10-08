@@ -7,6 +7,7 @@ from typing import Protocol
 from uuid import NAMESPACE_URL, uuid5
 
 from trade_brain.contracts import FeatureValue, MarketSnapshot, PaperMode, QualityStatus
+from trade_brain.configuration import TradeBrainConfig, config_from_payload, config_to_payload
 from trade_brain.orchestration import DecisionCycleResult
 from trade_brain.paper import PaperAccount, PaperRecommendation, PaperState
 from trade_brain.reporting import PaperReport
@@ -74,6 +75,34 @@ class SupabaseSnapshotStore:
         error = getattr(response, "error", None)
         if error:
             raise RuntimeError(f"Supabase snapshot insert failed: {error}")
+
+    def load_config(self) -> TradeBrainConfig | None:
+        """Load the active configuration through the server-only client."""
+        response = (
+            self._client.table("trade_brain_configs")
+            .select("payload")
+            .eq("config_id", "active")
+            .limit(1)
+            .execute()
+        )
+        if getattr(response, "error", None):
+            raise RuntimeError(f"Supabase config lookup failed: {response.error}")
+        rows = getattr(response, "data", None) or []
+        if not rows:
+            return None
+        return config_from_payload(rows[0].get("payload"))
+
+    def save_config(self, config: TradeBrainConfig) -> None:
+        """Upsert the active configuration without exposing it to clients."""
+        response = self._client.table("trade_brain_configs").upsert(
+            {
+                "config_id": "active",
+                "config_version": config.config_version,
+                "payload": config_to_payload(config),
+            }
+        ).execute()
+        if getattr(response, "error", None):
+            raise RuntimeError(f"Supabase config save failed: {response.error}")
 
     def ensure_experiment(
         self,

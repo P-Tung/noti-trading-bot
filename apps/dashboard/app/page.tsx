@@ -338,6 +338,7 @@ export default function DashboardPage() {
           <button className="ghost-button" type="button" onClick={() => void loadSnapshots()} disabled={isLoading}>
             {isLoading ? "Đang tải..." : "Đồng bộ dữ liệu"}
           </button>
+          <a className="ghost-button config-link" href="/config">Cấu hình Trade Brain</a>
           <span className={`action-feedback ${evaluationMessage ? "is-visible" : ""}`} role="status" aria-live="polite">
             {evaluationMessage ?? ""}
           </span>

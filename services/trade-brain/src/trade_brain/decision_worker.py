@@ -11,6 +11,7 @@ import httpx
 from trade_brain.binance import BinanceClientError, BinancePublicClient
 from trade_brain.claude import ClaudeSelector
 from trade_brain.collector import TIMEFRAMES, PublicSnapshotCollector
+from trade_brain.configuration import TradeBrainConfig, runtime_policies
 from trade_brain.contracts import MarketSnapshot, PaperMode, Profile, TradeCandidate
 from trade_brain.discord import BroadcastNotifier, DiscordCommandPoller, DiscordNotifier
 from trade_brain.orchestration import CandidateRiskInput, DecisionCycleResult, DecisionSelector, run_decision_cycle
@@ -60,8 +61,10 @@ async def run_decision_once(
     now: datetime | None = None,
     notifier: TelegramNotifier | None = None,
     notified_report_keys: set[tuple[str, int, str]] | None = None,
+    brain_config: TradeBrainConfig | None = None,
 ) -> list[DecisionCycleResult]:
     """Collect, detect, risk-gate, select, and paper-record one cycle per symbol."""
+    active_brain_config = brain_config or TradeBrainConfig.defaults()
     ensure_experiment = getattr(store, "ensure_experiment", None)
     if callable(ensure_experiment):
         ensure_experiment(experiment_id)
@@ -80,6 +83,9 @@ async def run_decision_once(
             bars_1h,
             bars_15m,
             snapshot.snapshot_id,
+            t1_config=active_brain_config.t1,
+            t2_config=active_brain_config.t2,
+            r1_config=active_brain_config.r1,
             bars_4h=collected.bars_by_timeframe["4h"],
             bars_1d=collected.bars_by_timeframe["1d"],
             current_only=True,
@@ -94,7 +100,13 @@ async def run_decision_once(
             )
             for candidate in pipeline.candidates
         }
-        result = await run_decision_cycle(snapshot, list(pipeline.candidates), risk_inputs, selector)
+        result = await run_decision_cycle(
+            snapshot,
+            list(pipeline.candidates),
+            risk_inputs,
+            selector,
+            policies=runtime_policies(active_brain_config),
+        )
         paper_result = _persist_cycle(store, snapshot, result, paper_engine)
         await _notify_recommendations(notifier, paper_result)
         await _persist_and_notify_reports(
@@ -125,16 +137,22 @@ async def run_forever() -> None:
 
     async def evaluate(notify: bool) -> list[DecisionCycleResult]:
         async with cycle_lock:
+            brain_config = _load_brain_config(store)
             return await run_decision_once(
                 store,
                 experiment_id,
-                _configured_symbols(),
+                brain_config.symbols,
                 api_selector,
                 client,
                 paper_engine,
-                config=DecisionWorkerConfig(paper_mode=_configured_mode()),
+                config=DecisionWorkerConfig(
+                    equity_usdt=brain_config.initial_equity_usdt,
+                    available_margin_usdt=brain_config.initial_equity_usdt,
+                    paper_mode=brain_config.paper_mode,
+                ),
                 notifier=notifier if notify else None,
                 notified_report_keys=notified_report_keys,
+                brain_config=brain_config,
             )
 
     async def evaluate_on_demand() -> str:
@@ -370,6 +388,16 @@ def _build_store() -> SnapshotStore:
     if os.environ.get("SUPABASE_URL") and os.environ.get("SUPABASE_SECRET_KEY"):
         return SupabaseSnapshotStore.from_environment()
     return InMemorySnapshotStore()
+
+
+def _load_brain_config(store: SnapshotStore) -> TradeBrainConfig:
+    """Load the last validated config, keeping safe defaults for first boot."""
+    loader = getattr(store, "load_config", None)
+    if callable(loader):
+        loaded = loader()
+        if loaded is not None:
+            return loaded
+    return TradeBrainConfig.defaults()
 
 
 def _prepare_and_restore_paper_state(

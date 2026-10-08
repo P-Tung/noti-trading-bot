@@ -89,22 +89,23 @@ def evaluate_candidate_risk(
     quantity_step: float,
     minimum_quantity: float = 0.0,
     price_tick: float = 0.0,
+    policy: RiskPolicy | None = None,
 ) -> RiskResult:
     """Apply hard profile gates before Claude can select the candidate."""
-    policy = POLICIES[candidate.profile]
+    active_policy = policy or POLICIES[candidate.profile]
     codes: list[str] = []
     if not candidate.eligible:
         codes.append("CANDIDATE_NOT_ELIGIBLE")
     _check_price_plan(candidate, codes)
     _check_price_tick(candidate, price_tick, codes)
     if context.paper_mode is PaperMode.VERIFIED_PAPER:
-        _check_statistics(candidate, statistics, policy, codes)
-    _check_drawdown(context, policy, codes)
-    risk_budget = context.equity_usdt * policy.risk_per_trade_pct
+        _check_statistics(candidate, statistics, active_policy, codes)
+    _check_drawdown(context, active_policy, codes)
+    risk_budget = context.equity_usdt * active_policy.risk_per_trade_pct
     candidate_risk_pct = risk_budget / context.equity_usdt if context.equity_usdt > 0 else 1.0
-    if context.open_risk_pct + candidate_risk_pct > policy.max_open_risk_pct:
+    if context.open_risk_pct + candidate_risk_pct > active_policy.max_open_risk_pct:
         codes.append("OPEN_RISK_LIMIT")
-    if context.cluster_risk_pct + candidate_risk_pct > policy.max_cluster_risk_pct:
+    if context.cluster_risk_pct + candidate_risk_pct > active_policy.max_cluster_risk_pct:
         codes.append("CLUSTER_RISK_LIMIT")
     if context.available_margin_usdt <= 0:
         codes.append("MARGIN_UNAVAILABLE")
