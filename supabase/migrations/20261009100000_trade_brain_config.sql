@@ -8,3 +8,4 @@ create table public.trade_brain_configs (
 
 alter table public.trade_brain_configs enable row level security;
 revoke all on table public.trade_brain_configs from anon, authenticated;
+grant select, insert, update on table public.trade_brain_configs to service_role;
