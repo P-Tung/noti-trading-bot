@@ -13,4 +13,6 @@ RUN chmod +x ./start-railway.sh
 ENV PYTHONPATH=/app/src
 ENV PYTHONUNBUFFERED=1
 
+EXPOSE 8080
+
 CMD ["./start-railway.sh"]
