@@ -6,6 +6,7 @@ type Profile = "PROACTIVE" | "BALANCED" | "CAUTIOUS";
 type PaperMode = "RESEARCH_PAPER" | "VERIFIED_PAPER";
 
 type StrategyConfig = Record<string, number>;
+type BinanceSymbol = { symbol: string; baseAsset: string; quoteAsset: string; contractType: string };
 
 type ProfilePolicy = {
   quality_minimum: number;
@@ -81,6 +82,9 @@ export default function TradeBrainConfigPage() {
   const [config, setConfig] = useState<TradeBrainConfig | null>(null);
   const [status, setStatus] = useState("Đang tải cấu hình...");
   const [isSaving, setIsSaving] = useState(false);
+  const [binanceSymbols, setBinanceSymbols] = useState<BinanceSymbol[]>([]);
+  const [symbolQuery, setSymbolQuery] = useState("");
+  const [symbolsStatus, setSymbolsStatus] = useState("Đang tải danh sách Binance...");
 
   useEffect(() => {
     fetch("/api/config", { cache: "no-store" })
@@ -93,9 +97,30 @@ export default function TradeBrainConfigPage() {
       .catch((error: unknown) => setStatus(error instanceof Error ? error.message : "Không thể tải cấu hình."));
   }, []);
 
+  useEffect(() => {
+    fetch("/api/binance/symbols", { cache: "no-store" })
+      .then(async (response) => {
+        const payload = await response.json() as { symbols?: BinanceSymbol[]; error?: string };
+        if (!response.ok || !payload.symbols) throw new Error(payload.error ?? "Không thể tải danh sách Binance.");
+        setBinanceSymbols(payload.symbols);
+        setSymbolsStatus(`${payload.symbols.length} hợp đồng vĩnh cửu USDT đang giao dịch`);
+      })
+      .catch((error: unknown) => setSymbolsStatus(error instanceof Error ? error.message : "Không thể tải danh sách Binance."));
+  }, []);
+
   function updateProfile(profile: Profile, key: keyof ProfilePolicy, value: number) {
     if (!config) return;
     setConfig({ ...config, profiles: { ...config.profiles, [profile]: { ...config.profiles[profile], [key]: value } } });
+  }
+
+  function toggleSymbol(symbol: string) {
+    if (!config) return;
+    const isSelected = config.symbols.includes(symbol);
+    if (!isSelected && config.symbols.length >= 30) {
+      setSymbolsStatus("Chỉ được chọn tối đa 30 mã theo tài liệu V1.");
+      return;
+    }
+    setConfig({ ...config, symbols: isSelected ? config.symbols.filter((item) => item !== symbol) : [...config.symbols, symbol] });
   }
 
   async function saveConfig(event: FormEvent<HTMLFormElement>) {
@@ -139,7 +164,7 @@ export default function TradeBrainConfigPage() {
           <div className="section-heading"><div><p className="eyebrow">Experiment</p><h2>Chế độ và dữ liệu</h2></div></div>
           <div className="config-grid config-grid-wide">
             <label className="config-field"><span>Phiên bản cấu hình</span><input value={config.config_version} onChange={(event) => setConfig({ ...config, config_version: event.target.value })} /></label>
-            <label className="config-field"><span>Mã giao dịch, tối đa 30</span><input value={config.symbols.join(", ")} onChange={(event) => setConfig({ ...config, symbols: event.target.value.split(",").map((symbol) => symbol.trim().toUpperCase()).filter(Boolean) })} /></label>
+            <div className="symbol-picker config-field"><span>Mã giao dịch, chọn từ Binance, tối đa 30</span><div className="symbol-picker-toolbar"><input aria-label="Tìm mã Binance" placeholder="Tìm BTC, ETH..." value={symbolQuery} onChange={(event) => setSymbolQuery(event.target.value.toUpperCase())} /><span>{config.symbols.length}/30 đã chọn</span></div><div className="selected-symbols" aria-label="Mã đã chọn">{config.symbols.map((symbol) => <button type="button" key={symbol} className="selected-symbol" onClick={() => toggleSymbol(symbol)}>{symbol} ×</button>)}</div><div className="symbol-list" role="group" aria-label="Danh sách mã Binance">{binanceSymbols.filter((item) => item.symbol.includes(symbolQuery) || item.baseAsset.includes(symbolQuery)).slice(0, 80).map((item) => <label className="symbol-option" key={item.symbol}><input type="checkbox" checked={config.symbols.includes(item.symbol)} onChange={() => toggleSymbol(item.symbol)} /><span>{item.symbol}</span><small>{item.baseAsset}/USDT</small></label>)}{binanceSymbols.length === 0 ? <p className="panel-note">{symbolsStatus}</p> : null}</div><small className="field-helper">Nguồn: Binance USDⓈ-M perpetual, chỉ lấy mã đang ở trạng thái TRADING.</small></div>
             <label className="config-field"><span>Chế độ PAPER</span><select value={config.paper_mode} onChange={(event) => setConfig({ ...config, paper_mode: event.target.value as PaperMode })}><option value="RESEARCH_PAPER">RESEARCH_PAPER</option><option value="VERIFIED_PAPER">VERIFIED_PAPER</option></select></label>
             <NumberField label="Vốn mô phỏng, USDT" value={config.initial_equity_usdt} step="100" min="1" onChange={(value) => setConfig({ ...config, initial_equity_usdt: value })} />
           </div>
