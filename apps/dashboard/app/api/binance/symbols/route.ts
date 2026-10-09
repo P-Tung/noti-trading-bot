@@ -11,7 +11,7 @@ type BinanceExchangeSymbol = {
 
 export async function GET() {
   try {
-    const response = await fetch("https://fapi.binance.com/fapi/v1/exchangeInfo", {
+    const response = await fetch("https://www.binance.com/fapi/v1/exchangeInfo", {
       cache: "no-store",
       headers: { accept: "application/json" },
     });
