@@ -26,6 +26,7 @@ from trade_brain.telegram import (
     TelegramCommandPoller,
     TelegramError,
     TelegramNotifier,
+    configured_chat_ids,
     format_evaluation,
     format_recommendation,
     format_report,
@@ -373,7 +374,7 @@ def _persist_report(store: SnapshotStore, experiment_id: str, report: PaperRepor
 
 
 def _build_notifier() -> TelegramNotifier | None:
-    if os.environ.get("TELEGRAM_BOT_TOKEN") and os.environ.get("TELEGRAM_CHAT_ID"):
+    if os.environ.get("TELEGRAM_BOT_TOKEN") and configured_chat_ids():
         return TelegramNotifier.from_environment()
     return None
 

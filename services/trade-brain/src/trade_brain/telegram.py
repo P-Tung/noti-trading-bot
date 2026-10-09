@@ -18,14 +18,31 @@ class TelegramError(RuntimeError):
     """Raised when Telegram rejects an alert."""
 
 
+def configured_chat_ids() -> tuple[str, ...]:
+    """Read one or more authorized chats without exposing their values."""
+    raw_ids = os.environ.get("TELEGRAM_CHAT_IDS") or os.environ.get("TELEGRAM_CHAT_ID", "")
+    return tuple(dict.fromkeys(chat_id.strip() for chat_id in raw_ids.split(",") if chat_id.strip()))
+
+
+def _normalise_chat_ids(chat_ids: str | Sequence[str]) -> tuple[str, ...]:
+    if isinstance(chat_ids, str):
+        values = (chat_ids,)
+    else:
+        values = tuple(chat_ids)
+    normalised = tuple(dict.fromkeys(str(chat_id).strip() for chat_id in values if str(chat_id).strip()))
+    if not normalised:
+        raise ValueError("at least one chat_id is required")
+    return normalised
+
+
 class TelegramNotifier:
     """Send concise alerts through the Telegram Bot API."""
 
-    def __init__(self, bot_token: str, chat_id: str, client: httpx.AsyncClient | None = None) -> None:
-        if not bot_token or not chat_id:
-            raise ValueError("bot_token and chat_id are required")
+    def __init__(self, bot_token: str, chat_ids: str | Sequence[str], client: httpx.AsyncClient | None = None) -> None:
+        if not bot_token:
+            raise ValueError("bot_token is required")
         self._bot_token = bot_token
-        self._chat_id = chat_id
+        self._chat_ids = _normalise_chat_ids(chat_ids)
         self._client = client or httpx.AsyncClient(base_url="https://api.telegram.org", timeout=10.0)
         self._owns_client = client is None
 
@@ -34,7 +51,7 @@ class TelegramNotifier:
         """Create a notifier from server-only environment variables."""
         return cls(
             os.environ.get("TELEGRAM_BOT_TOKEN", ""),
-            os.environ.get("TELEGRAM_CHAT_ID", ""),
+            configured_chat_ids(),
         )
 
     async def close(self) -> None:
@@ -46,26 +63,27 @@ class TelegramNotifier:
         """Send one message and fail explicitly when Telegram rejects it."""
         if not message.strip():
             raise ValueError("Telegram message cannot be empty")
-        for attempt in range(2):
-            try:
-                response = await self._client.post(
-                    f"/bot{self._bot_token}/sendMessage",
-                    json={"chat_id": self._chat_id, "text": message[:4096]},
-                )
-                if response.status_code == 429 or response.status_code >= 500:
+        for chat_id in self._chat_ids:
+            for attempt in range(2):
+                try:
+                    response = await self._client.post(
+                        f"/bot{self._bot_token}/sendMessage",
+                        json={"chat_id": chat_id, "text": message[:4096]},
+                    )
+                    if response.status_code == 429 or response.status_code >= 500:
+                        if attempt == 0:
+                            await asyncio.sleep(0.2)
+                            continue
+                    response.raise_for_status()
+                    body = response.json()
+                    if not isinstance(body, dict) or body.get("ok") is not True:
+                        raise TelegramError("Telegram rejected the message")
+                    break
+                except httpx.RequestError:
                     if attempt == 0:
                         await asyncio.sleep(0.2)
                         continue
-                response.raise_for_status()
-                body = response.json()
-                if not isinstance(body, dict) or body.get("ok") is not True:
-                    raise TelegramError("Telegram rejected the message")
-                return
-            except httpx.RequestError:
-                if attempt == 0:
-                    await asyncio.sleep(0.2)
-                    continue
-                raise
+                    raise
 
 
 class TelegramCommandPoller:
@@ -74,14 +92,14 @@ class TelegramCommandPoller:
     def __init__(
         self,
         bot_token: str,
-        chat_id: str,
+        chat_ids: str | Sequence[str],
         on_evaluate: Callable[[], Awaitable[str]],
         client: httpx.AsyncClient | None = None,
     ) -> None:
-        if not bot_token or not chat_id:
-            raise ValueError("bot_token and chat_id are required")
+        if not bot_token:
+            raise ValueError("bot_token is required")
         self._bot_token = bot_token
-        self._chat_id = str(chat_id)
+        self._chat_ids = set(_normalise_chat_ids(chat_ids))
         self._on_evaluate = on_evaluate
         self._client = client or httpx.AsyncClient(
             base_url="https://api.telegram.org",
@@ -94,7 +112,7 @@ class TelegramCommandPoller:
         """Create a command poller from server-only environment variables."""
         return cls(
             os.environ.get("TELEGRAM_BOT_TOKEN", ""),
-            os.environ.get("TELEGRAM_CHAT_ID", ""),
+            configured_chat_ids(),
             on_evaluate,
         )
 
@@ -143,11 +161,11 @@ class TelegramCommandPoller:
         text = message.get("text")
         if not isinstance(chat, dict) or not isinstance(text, str):
             return
-        if str(chat.get("id")) != self._chat_id:
+        if str(chat.get("id")) not in self._chat_ids:
             return
         command = text.strip().split(maxsplit=1)[0].split("@", maxsplit=1)[0].lower()
         if command == "/start" or command == "/help":
-            await self._send("Lệnh khả dụng: /danh-gia để chạy đánh giá PAPER ngay.")
+            await self._send("Lệnh khả dụng: /danh-gia để chạy đánh giá PAPER ngay.", str(chat.get("id")))
             return
         if command not in {"/danh-gia", "/danhgia", "/danh_gia", "/evaluate", "/evaluate_now"}:
             return
@@ -155,12 +173,12 @@ class TelegramCommandPoller:
             result = await self._on_evaluate()
         except Exception:
             result = "Không thể hoàn tất đánh giá PAPER lúc này. Xem log Trade Brain để biết chi tiết."
-        await self._send(result)
+        await self._send(result, str(chat.get("id")))
 
-    async def _send(self, message: str) -> None:
+    async def _send(self, message: str, chat_id: str) -> None:
         response = await self._client.post(
             f"/bot{self._bot_token}/sendMessage",
-            json={"chat_id": self._chat_id, "text": message[:4096]},
+            json={"chat_id": chat_id, "text": message[:4096]},
         )
         response.raise_for_status()
         body = response.json()
