@@ -207,7 +207,7 @@ export default function TradeBrainConfigPage() {
               <small className="field-helper">Nguồn: Binance USDⓈ-M perpetual, chỉ lấy mã đang ở trạng thái TRADING.</small>
             </div>
             <label className="config-field"><span>Chế độ PAPER</span><select value={config.paper_mode} onChange={(event) => setConfig({ ...config, paper_mode: event.target.value as PaperMode })}><option value="RESEARCH_PAPER">RESEARCH_PAPER</option><option value="VERIFIED_PAPER">VERIFIED_PAPER</option></select></label>
-            <NumberField label="Vốn mô phỏng, USDT" value={config.initial_equity_usdt} step="100" min="1" onChange={(value) => setConfig({ ...config, initial_equity_usdt: value })} />
+            <NumberField label="Vốn mô phỏng, USDT" value={config.initial_equity_usdt} step="1" min="1" onChange={(value) => setConfig({ ...config, initial_equity_usdt: value })} />
           </div>
           <p className="config-warning">Không chỉnh `VERIFIED_PAPER` nếu chưa có đủ bằng chứng ngoài mẫu theo tài liệu.</p>
         </section>
