@@ -1,6 +1,7 @@
 """Small typed client for Binance USDⓈ-M public market-data endpoints."""
 
 from dataclasses import dataclass
+import os
 import httpx
 
 
@@ -66,9 +67,10 @@ class BinancePublicClient:
     def __init__(
         self,
         client: httpx.AsyncClient | None = None,
-        base_url: str = "https://fapi.binance.com",
+        base_url: str | None = None,
     ) -> None:
-        self._client = client or httpx.AsyncClient(base_url=base_url, timeout=10.0)
+        resolved_base_url = base_url or os.environ.get("BINANCE_BASE_URL", "https://fapi.binance.com")
+        self._client = client or httpx.AsyncClient(base_url=resolved_base_url, timeout=10.0)
         self._owns_client = client is None
 
     async def close(self) -> None:
