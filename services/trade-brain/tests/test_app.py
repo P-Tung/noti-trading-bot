@@ -132,6 +132,14 @@ def test_evaluate_uses_saved_symbol_configuration(monkeypatch) -> None:
     assert received_symbols == configured_symbols
 
 
+def test_config_accepts_more_than_thirty_symbols() -> None:
+    configured_symbols = [f"COIN{index}USDT" for index in range(31)]
+
+    config = TradeBrainConfig.defaults().model_copy(update={"symbols": configured_symbols})
+
+    assert config.symbols == configured_symbols
+
+
 def test_decision_run_returns_paper_only_decisions() -> None:
     store = InMemorySnapshotStore()
     timestamp = datetime(2026, 1, 1, tzinfo=timezone.utc)

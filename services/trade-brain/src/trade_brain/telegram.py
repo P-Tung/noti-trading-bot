@@ -30,8 +30,6 @@ def _normalise_chat_ids(chat_ids: str | Sequence[str]) -> tuple[str, ...]:
     else:
         values = tuple(chat_ids)
     normalised = tuple(dict.fromkeys(str(chat_id).strip() for chat_id in values if str(chat_id).strip()))
-    if not normalised:
-        raise ValueError("at least one chat_id is required")
     return normalised
 
 
@@ -58,6 +56,12 @@ class TelegramNotifier:
         """Close the owned HTTP client."""
         if self._owns_client:
             await self._client.aclose()
+
+    def add_chat_id(self, chat_id: str) -> None:
+        """Add a registered recipient without replacing existing recipients."""
+        normalised_chat_id = str(chat_id).strip()
+        if normalised_chat_id and normalised_chat_id not in self._chat_ids:
+            self._chat_ids = (*self._chat_ids, normalised_chat_id)
 
     async def send(self, message: str) -> None:
         """Send one message and fail explicitly when Telegram rejects it."""
@@ -95,12 +99,16 @@ class TelegramCommandPoller:
         chat_ids: str | Sequence[str],
         on_evaluate: Callable[[], Awaitable[str]],
         client: httpx.AsyncClient | None = None,
+        on_start: Callable[[str], Awaitable[None]] | None = None,
+        on_evaluate_result: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         if not bot_token:
             raise ValueError("bot_token is required")
         self._bot_token = bot_token
         self._chat_ids = set(_normalise_chat_ids(chat_ids))
         self._on_evaluate = on_evaluate
+        self._on_start = on_start
+        self._on_evaluate_result = on_evaluate_result
         self._client = client or httpx.AsyncClient(
             base_url="https://api.telegram.org",
             timeout=httpx.Timeout(35.0, connect=10.0),
@@ -108,12 +116,19 @@ class TelegramCommandPoller:
         self._owns_client = client is None
 
     @classmethod
-    def from_environment(cls, on_evaluate: Callable[[], Awaitable[str]]) -> "TelegramCommandPoller":
+    def from_environment(
+        cls,
+        on_evaluate: Callable[[], Awaitable[str]],
+        on_start: Callable[[str], Awaitable[None]] | None = None,
+        on_evaluate_result: Callable[[str], Awaitable[None]] | None = None,
+    ) -> "TelegramCommandPoller":
         """Create a command poller from server-only environment variables."""
         return cls(
             os.environ.get("TELEGRAM_BOT_TOKEN", ""),
             configured_chat_ids(),
             on_evaluate,
+            on_start=on_start,
+            on_evaluate_result=on_evaluate_result,
         )
 
     async def close(self) -> None:
@@ -124,17 +139,33 @@ class TelegramCommandPoller:
     async def run_forever(self) -> None:
         """Long-poll Telegram until the worker is cancelled."""
         offset: int | None = None
+        print("Telegram command poller started", flush=True)
         while True:
             try:
                 updates = await self._get_updates(offset)
-            except (httpx.ReadTimeout, httpx.RequestError):
+            except (httpx.ReadTimeout, httpx.RequestError) as error:
+                print(f"Telegram getUpdates network retry: {type(error).__name__}", flush=True)
                 await asyncio.sleep(1)
+                continue
+            except httpx.HTTPStatusError as error:
+                print(
+                    f"Telegram getUpdates failed with HTTP {error.response.status_code}; retrying",
+                    flush=True,
+                )
+                await asyncio.sleep(2)
+                continue
+            except TelegramError:
+                print("Telegram getUpdates returned an invalid response; retrying", flush=True)
+                await asyncio.sleep(2)
                 continue
             for update in updates:
                 update_id = update.get("update_id")
                 if isinstance(update_id, int):
                     offset = update_id + 1
-                await self._handle_update(update)
+                try:
+                    await self._handle_update(update)
+                except Exception:
+                    print("Telegram update handling failed; continuing poller", flush=True)
 
     async def _get_updates(self, offset: int | None) -> list[dict[str, object]]:
         params: dict[str, object] = {
@@ -161,11 +192,19 @@ class TelegramCommandPoller:
         text = message.get("text")
         if not isinstance(chat, dict) or not isinstance(text, str):
             return
-        if str(chat.get("id")) not in self._chat_ids:
-            return
+        chat_id = str(chat.get("id"))
         command = text.strip().split(maxsplit=1)[0].split("@", maxsplit=1)[0].lower()
         if command == "/start" or command == "/help":
-            await self._send("Lệnh khả dụng: /danh-gia để chạy đánh giá PAPER ngay.", str(chat.get("id")))
+            if command == "/start":
+                self._chat_ids.add(chat_id)
+                if self._on_start is not None:
+                    try:
+                        await self._on_start(chat_id)
+                    except Exception:
+                        print("Telegram subscriber persistence failed; continuing response", flush=True)
+            await self._send("Đã đăng ký nhận tin. Lệnh khả dụng: /danh-gia để chạy đánh giá PAPER ngay.", chat_id)
+            return
+        if chat_id not in self._chat_ids:
             return
         if command not in {"/danh-gia", "/danhgia", "/danh_gia", "/evaluate", "/evaluate_now"}:
             return
@@ -173,7 +212,10 @@ class TelegramCommandPoller:
             result = await self._on_evaluate()
         except Exception:
             result = "Không thể hoàn tất đánh giá PAPER lúc này. Xem log Trade Brain để biết chi tiết."
-        await self._send(result, str(chat.get("id")))
+        if self._on_evaluate_result is not None:
+            await self._on_evaluate_result(result)
+        else:
+            await self._send(result, chat_id)
 
     async def _send(self, message: str, chat_id: str) -> None:
         response = await self._client.post(
@@ -198,6 +240,24 @@ def format_recommendation(recommendation: PaperRecommendation) -> str:
     )
 
 
+def format_immediate_recommendations(
+    symbol: str,
+    recommendations: Sequence[PaperRecommendation],
+) -> str:
+    """Format an immediate green signal for one symbol."""
+    lines = ["🟢 CÓ THỂ TRADE PAPER", f"📈 {symbol}"]
+    for recommendation in recommendations:
+        candidate = recommendation.candidate
+        lines.extend(
+            [
+                f"• {_profile_label(recommendation.profile.value)}: {candidate.side.value}",
+                f"  Entry {candidate.entry_estimate} | SL {candidate.stop_price} | TP {candidate.target_price}",
+                f"  Trạng thái: {recommendation.state.value}",
+            ]
+        )
+    return "\n".join(lines)
+
+
 def format_report(report: PaperReport) -> str:
     """Format a cohort report for Telegram."""
     profile = report.profile.value if report.profile else "ALL"
@@ -220,17 +280,28 @@ def format_evaluation(
 ) -> str:
     """Format every on-demand evaluation with compact visual status markers."""
     recommendation_profiles = {recommendation.profile for recommendation in recommendations}
-    lines = [
-        "📊 ĐÁNH GIÁ PAPER THEO YÊU CẦU",
-        f"📦 {len(results)} mã | {sum(len(result.decisions) for result in results)} quyết định",
-    ]
+    visible_results: list[tuple[str, list[str]]] = []
+    visible_decision_count = 0
     for result in results:
         symbol = (snapshot_symbols or {}).get(result.snapshot_id, result.snapshot_id[:12])
-        lines.append(f"\n📈 {symbol}")
+        decision_lines = []
         for decision in result.decisions:
             icon = _decision_icon(decision.decision.value, decision.profile in recommendation_profiles)
+            if icon == "🔴":
+                continue
             label = _profile_label(decision.profile.value)
-            lines.append(f"{icon} {label}: {_decision_label(decision.decision.value)}")
+            decision_lines.append(f"{icon} {label}: {_decision_label(decision.decision.value)}")
+        if decision_lines:
+            visible_results.append((symbol, decision_lines))
+            visible_decision_count += len(decision_lines)
+
+    lines = [
+        "📊 ĐÁNH GIÁ PAPER THEO YÊU CẦU",
+        f"📦 {len(results)} mã được đánh giá | {visible_decision_count} tín hiệu hiển thị",
+    ]
+    for symbol, decision_lines in visible_results:
+        lines.append(f"\n📈 {symbol}")
+        lines.extend(decision_lines)
     if recommendations:
         lines.append("\n🟢 PAPER TRADE ĐỀ XUẤT")
         for recommendation in recommendations:
@@ -243,7 +314,7 @@ def format_evaluation(
                 ]
             )
     else:
-        lines.append("\n📭 Không có đề xuất trade PAPER trong chu kỳ này.")
+        lines.append("\n📭 Không có mã 🟢 hoặc 🟡 trong chu kỳ này.")
     lines.append("\nChú thích: 🟢 Có thể trade PAPER | 🟡 Chờ điều kiện | 🔴 Không trade")
     return "\n".join(lines)
 

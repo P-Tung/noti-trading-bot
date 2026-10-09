@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import os
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 
@@ -15,7 +15,7 @@ from trade_brain.configuration import TradeBrainConfig, runtime_policies
 from trade_brain.contracts import MarketSnapshot, PaperMode, Profile, TradeCandidate
 from trade_brain.discord import BroadcastNotifier, DiscordCommandPoller, DiscordNotifier
 from trade_brain.orchestration import CandidateRiskInput, DecisionCycleResult, DecisionSelector, run_decision_cycle
-from trade_brain.paper import PaperTradingEngine
+from trade_brain.paper import PaperRecommendation, PaperTradingEngine
 from trade_brain.paper_service import PaperDecisionResult, create_paper_recommendations
 from trade_brain.reporting import CohortScope, CohortTracker, PaperReport, ReportRecord
 from trade_brain.risk import CandidateStatistics, RiskContext
@@ -28,6 +28,7 @@ from trade_brain.telegram import (
     TelegramNotifier,
     configured_chat_ids,
     format_evaluation,
+    format_immediate_recommendations,
     format_recommendation,
     format_report,
 )
@@ -63,6 +64,7 @@ async def run_decision_once(
     notifier: TelegramNotifier | None = None,
     notified_report_keys: set[tuple[str, int, str]] | None = None,
     brain_config: TradeBrainConfig | None = None,
+    on_recommendations: Callable[[str, Sequence[PaperRecommendation]], Awaitable[None]] | None = None,
 ) -> list[DecisionCycleResult]:
     """Collect, detect, risk-gate, select, and paper-record one cycle per symbol."""
     active_brain_config = brain_config or TradeBrainConfig.defaults()
@@ -109,6 +111,8 @@ async def run_decision_once(
             policies=runtime_policies(active_brain_config),
         )
         paper_result = _persist_cycle(store, snapshot, result, paper_engine)
+        if on_recommendations is not None and paper_result.recommendations:
+            await on_recommendations(snapshot.symbol, paper_result.recommendations)
         await _notify_recommendations(notifier, paper_result)
         await _persist_and_notify_reports(
             store,
@@ -127,16 +131,25 @@ async def run_forever() -> None:
     store = _build_store()
     client = BinancePublicClient()
     paper_engine = PaperTradingEngine()
-    telegram_notifier = _build_notifier()
+    telegram_notifier = _build_notifier(store)
     discord_notifier = _build_discord_notifier()
     notifier_sinks = [sink for sink in (telegram_notifier, discord_notifier) if sink is not None]
     notifier = BroadcastNotifier(notifier_sinks) if notifier_sinks else None
     notified_report_keys: set[tuple[str, int, str]] = set()
     experiment_id = os.environ.get("TRADE_V1_EXPERIMENT_ID", "trade-v1-local")
-    _prepare_and_restore_paper_state(store, paper_engine, experiment_id)
     cycle_lock = asyncio.Lock()
+    initialisation_task: asyncio.Task[None] | None = None
+
+    async def broadcast_immediate_trade(
+        symbol: str,
+        recommendations: Sequence[PaperRecommendation],
+    ) -> None:
+        if telegram_notifier is not None:
+            await telegram_notifier.send(format_immediate_recommendations(symbol, recommendations))
 
     async def evaluate(notify: bool) -> list[DecisionCycleResult]:
+        if initialisation_task is not None:
+            await initialisation_task
         async with cycle_lock:
             brain_config = _load_brain_config(store)
             return await run_decision_once(
@@ -154,6 +167,7 @@ async def run_forever() -> None:
                 notifier=notifier if notify else None,
                 notified_report_keys=notified_report_keys,
                 brain_config=brain_config,
+                on_recommendations=broadcast_immediate_trade if not notify else None,
             )
 
     async def evaluate_on_demand() -> str:
@@ -174,20 +188,55 @@ async def run_forever() -> None:
         }
         return format_evaluation(results, new_recommendations, snapshot_symbols)
 
+    async def register_telegram_chat(chat_id: str) -> None:
+        if telegram_notifier is not None:
+            telegram_notifier.add_chat_id(chat_id)
+        register_chat = getattr(store, "register_telegram_chat_id", None)
+        if callable(register_chat):
+            await asyncio.to_thread(register_chat, chat_id)
+
+    async def broadcast_telegram_evaluation(result: str) -> None:
+        if telegram_notifier is not None:
+            await telegram_notifier.send(result)
+
     command_pollers = []
-    if telegram_notifier is not None:
-        command_pollers.append(TelegramCommandPoller.from_environment(evaluate_on_demand))
+    if os.environ.get("TELEGRAM_BOT_TOKEN"):
+        command_pollers.append(
+            TelegramCommandPoller.from_environment(
+                evaluate_on_demand,
+                register_telegram_chat,
+                broadcast_telegram_evaluation,
+            )
+        )
     if os.environ.get("DISCORD_BOT_TOKEN"):
         command_pollers.append(DiscordCommandPoller.from_environment(evaluate_on_demand))
 
+    LOGGER.info(
+        "Decision worker started: telegram=%s, discord=%s",
+        telegram_notifier is not None,
+        bool(os.environ.get("DISCORD_BOT_TOKEN")),
+    )
+    print(
+        f"Decision worker ready: telegram={telegram_notifier is not None}, "
+        f"discord={bool(os.environ.get('DISCORD_BOT_TOKEN'))}",
+        flush=True,
+    )
+
+    initialisation_task = asyncio.create_task(
+        asyncio.to_thread(_prepare_and_restore_paper_state, store, paper_engine, experiment_id)
+    )
+
     async def run_periodic() -> None:
         while True:
-            await evaluate(notify=True)
+            try:
+                await evaluate(notify=True)
+            except Exception:
+                LOGGER.exception("Periodic decision cycle failed; keeping command pollers alive")
             await asyncio.sleep(_configured_interval())
 
     try:
-        tasks = [asyncio.create_task(run_periodic())]
-        tasks.extend(asyncio.create_task(poller.run_forever()) for poller in command_pollers)
+        tasks = [asyncio.create_task(poller.run_forever()) for poller in command_pollers]
+        tasks.append(asyncio.create_task(run_periodic()))
         await asyncio.gather(*tasks)
     finally:
         for poller in command_pollers:
@@ -373,10 +422,18 @@ def _persist_report(store: SnapshotStore, experiment_id: str, report: PaperRepor
         save_report(experiment_id, report)
 
 
-def _build_notifier() -> TelegramNotifier | None:
-    if os.environ.get("TELEGRAM_BOT_TOKEN") and configured_chat_ids():
-        return TelegramNotifier.from_environment()
-    return None
+def _build_notifier(store: SnapshotStore) -> TelegramNotifier | None:
+    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    if not bot_token:
+        return None
+    chat_ids = set(configured_chat_ids())
+    load_chat_ids = getattr(store, "list_telegram_chat_ids", None)
+    if callable(load_chat_ids):
+        try:
+            chat_ids.update(load_chat_ids())
+        except Exception:
+            LOGGER.exception("Unable to load Telegram subscribers; continuing with env recipients")
+    return TelegramNotifier(bot_token, tuple(chat_ids))
 
 
 def _build_discord_notifier() -> DiscordNotifier | None:

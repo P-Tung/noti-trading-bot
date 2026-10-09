@@ -24,7 +24,7 @@ class TradeBrainConfig(StrictModel):
 
     config_version: str = Field(min_length=1, max_length=80)
     paper_mode: PaperMode = PaperMode.RESEARCH_PAPER
-    symbols: list[str] = Field(min_length=1, max_length=30)
+    symbols: list[str] = Field(min_length=1)
     initial_equity_usdt: float = Field(gt=0)
     t1: T1Config = T1Config()
     t2: T2Config = T2Config()

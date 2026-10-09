@@ -104,6 +104,31 @@ class SupabaseSnapshotStore:
         if getattr(response, "error", None):
             raise RuntimeError(f"Supabase config save failed: {response.error}")
 
+    def list_telegram_chat_ids(self) -> tuple[str, ...]:
+        """Load all Telegram chats that opted in with /start."""
+        response = (
+            self._client.table("telegram_subscribers")
+            .select("chat_id")
+            .order("created_at")
+            .execute()
+        )
+        if getattr(response, "error", None):
+            raise RuntimeError(f"Supabase Telegram subscriber read failed: {response.error}")
+        rows = getattr(response, "data", None) or []
+        return tuple(
+            str(row["chat_id"])
+            for row in rows
+            if isinstance(row, dict) and row.get("chat_id")
+        )
+
+    def register_telegram_chat_id(self, chat_id: str) -> None:
+        """Persist a Telegram chat that opted in with /start."""
+        response = self._client.table("telegram_subscribers").upsert(
+            {"chat_id": str(chat_id), "last_seen_at": datetime.now(timezone.utc).isoformat()}
+        ).execute()
+        if getattr(response, "error", None):
+            raise RuntimeError(f"Supabase Telegram subscriber write failed: {response.error}")
+
     def ensure_experiment(
         self,
         experiment_id: str,

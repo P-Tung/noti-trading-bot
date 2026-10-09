@@ -117,10 +117,6 @@ export default function TradeBrainConfigPage() {
   function toggleSymbol(symbol: string) {
     if (!config) return;
     const isSelected = config.symbols.includes(symbol);
-    if (!isSelected && config.symbols.length >= 30) {
-      setSymbolsStatus("Chỉ được chọn tối đa 30 mã theo tài liệu V1.");
-      return;
-    }
     setConfig({ ...config, symbols: isSelected ? config.symbols.filter((item) => item !== symbol) : [...config.symbols, symbol] });
   }
 
@@ -132,12 +128,7 @@ export default function TradeBrainConfigPage() {
   function selectAllFilteredSymbols() {
     if (!config) return;
     const availableSymbols = filteredSymbols.filter((item) => !config.symbols.includes(item.symbol));
-    const remainingSlots = 30 - config.symbols.length;
-    if (remainingSlots <= 0) {
-      setSymbolsStatus("Đã đạt giới hạn tối đa 30 mã.");
-      return;
-    }
-    setConfig({ ...config, symbols: [...config.symbols, ...availableSymbols.slice(0, remainingSlots).map((item) => item.symbol)] });
+    setConfig({ ...config, symbols: [...config.symbols, ...availableSymbols.map((item) => item.symbol)] });
   }
 
   async function saveConfig(event: FormEvent<HTMLFormElement>) {
@@ -182,7 +173,7 @@ export default function TradeBrainConfigPage() {
           <div className="config-grid config-grid-wide">
             <label className="config-field"><span>Phiên bản cấu hình</span><input value={config.config_version} onChange={(event) => setConfig({ ...config, config_version: event.target.value })} /></label>
             <div className="symbol-picker config-field">
-              <span>Mã giao dịch, chọn từ Binance, tối đa 30</span>
+              <span>Mã giao dịch, chọn từ Binance</span>
               <div className="symbol-dropdown">
                 <button className="symbol-dropdown-trigger" type="button" aria-expanded={isSymbolDropdownOpen} onClick={() => setIsSymbolDropdownOpen(!isSymbolDropdownOpen)}>
                   <span>{config.symbols.length ? `${config.symbols.length} mã đã chọn` : "Chọn mã giao dịch"}</span>
@@ -191,7 +182,7 @@ export default function TradeBrainConfigPage() {
                 {isSymbolDropdownOpen ? <div className="symbol-dropdown-menu">
                   <div className="symbol-picker-toolbar">
                     <input aria-label="Tìm mã Binance" placeholder="Tìm BTC, ETH..." value={symbolQuery} onChange={(event) => setSymbolQuery(event.target.value.toUpperCase())} />
-                    <span>{config.symbols.length}/30</span>
+                    <span>{config.symbols.length} đã chọn</span>
                   </div>
                   <div className="symbol-dropdown-actions">
                     <button type="button" className="symbol-action" onClick={selectAllFilteredSymbols}>Chọn tất cả</button>
