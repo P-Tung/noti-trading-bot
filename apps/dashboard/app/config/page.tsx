@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 
 type Profile = "PROACTIVE" | "BALANCED" | "CAUTIOUS";
 type PaperMode = "RESEARCH_PAPER" | "VERIFIED_PAPER";
@@ -85,6 +85,7 @@ export default function TradeBrainConfigPage() {
   const [binanceSymbols, setBinanceSymbols] = useState<BinanceSymbol[]>([]);
   const [symbolQuery, setSymbolQuery] = useState("");
   const [symbolsStatus, setSymbolsStatus] = useState("Đang tải danh sách Binance...");
+  const [isSymbolDropdownOpen, setIsSymbolDropdownOpen] = useState(false);
 
   useEffect(() => {
     fetch("/api/config", { cache: "no-store" })
@@ -121,6 +122,22 @@ export default function TradeBrainConfigPage() {
       return;
     }
     setConfig({ ...config, symbols: isSelected ? config.symbols.filter((item) => item !== symbol) : [...config.symbols, symbol] });
+  }
+
+  const filteredSymbols = useMemo(
+    () => binanceSymbols.filter((item) => item.symbol.includes(symbolQuery) || item.baseAsset.includes(symbolQuery)),
+    [binanceSymbols, symbolQuery],
+  );
+
+  function selectAllFilteredSymbols() {
+    if (!config) return;
+    const availableSymbols = filteredSymbols.filter((item) => !config.symbols.includes(item.symbol));
+    const remainingSlots = 30 - config.symbols.length;
+    if (remainingSlots <= 0) {
+      setSymbolsStatus("Đã đạt giới hạn tối đa 30 mã.");
+      return;
+    }
+    setConfig({ ...config, symbols: [...config.symbols, ...availableSymbols.slice(0, remainingSlots).map((item) => item.symbol)] });
   }
 
   async function saveConfig(event: FormEvent<HTMLFormElement>) {
@@ -164,7 +181,31 @@ export default function TradeBrainConfigPage() {
           <div className="section-heading"><div><p className="eyebrow">Experiment</p><h2>Chế độ và dữ liệu</h2></div></div>
           <div className="config-grid config-grid-wide">
             <label className="config-field"><span>Phiên bản cấu hình</span><input value={config.config_version} onChange={(event) => setConfig({ ...config, config_version: event.target.value })} /></label>
-            <div className="symbol-picker config-field"><span>Mã giao dịch, chọn từ Binance, tối đa 30</span><div className="symbol-picker-toolbar"><input aria-label="Tìm mã Binance" placeholder="Tìm BTC, ETH..." value={symbolQuery} onChange={(event) => setSymbolQuery(event.target.value.toUpperCase())} /><span>{config.symbols.length}/30 đã chọn</span></div><div className="selected-symbols" aria-label="Mã đã chọn">{config.symbols.map((symbol) => <button type="button" key={symbol} className="selected-symbol" onClick={() => toggleSymbol(symbol)}>{symbol} ×</button>)}</div><div className="symbol-list" role="group" aria-label="Danh sách mã Binance">{binanceSymbols.filter((item) => item.symbol.includes(symbolQuery) || item.baseAsset.includes(symbolQuery)).slice(0, 80).map((item) => <label className="symbol-option" key={item.symbol}><input type="checkbox" checked={config.symbols.includes(item.symbol)} onChange={() => toggleSymbol(item.symbol)} /><span>{item.symbol}</span><small>{item.baseAsset}/USDT</small></label>)}{binanceSymbols.length === 0 ? <p className="panel-note">{symbolsStatus}</p> : null}</div><small className="field-helper">Nguồn: Binance USDⓈ-M perpetual, chỉ lấy mã đang ở trạng thái TRADING.</small></div>
+            <div className="symbol-picker config-field">
+              <span>Mã giao dịch, chọn từ Binance, tối đa 30</span>
+              <div className="symbol-dropdown">
+                <button className="symbol-dropdown-trigger" type="button" aria-expanded={isSymbolDropdownOpen} onClick={() => setIsSymbolDropdownOpen(!isSymbolDropdownOpen)}>
+                  <span>{config.symbols.length ? `${config.symbols.length} mã đã chọn` : "Chọn mã giao dịch"}</span>
+                  <span aria-hidden="true">{isSymbolDropdownOpen ? "⌃" : "⌄"}</span>
+                </button>
+                {isSymbolDropdownOpen ? <div className="symbol-dropdown-menu">
+                  <div className="symbol-picker-toolbar">
+                    <input aria-label="Tìm mã Binance" placeholder="Tìm BTC, ETH..." value={symbolQuery} onChange={(event) => setSymbolQuery(event.target.value.toUpperCase())} />
+                    <span>{config.symbols.length}/30</span>
+                  </div>
+                  <div className="symbol-dropdown-actions">
+                    <button type="button" className="symbol-action" onClick={selectAllFilteredSymbols}>Chọn tất cả</button>
+                    <button type="button" className="symbol-action" onClick={() => setConfig({ ...config, symbols: [] })}>Bỏ chọn tất cả</button>
+                  </div>
+                  <div className="selected-symbols" aria-label="Mã đã chọn">{config.symbols.map((symbol) => <button type="button" key={symbol} className="selected-symbol" onClick={() => toggleSymbol(symbol)}>{symbol} ×</button>)}</div>
+                  <div className="symbol-list" role="group" aria-label="Danh sách mã Binance">
+                    {filteredSymbols.slice(0, 80).map((item) => <label className="symbol-option" key={item.symbol}><input type="checkbox" checked={config.symbols.includes(item.symbol)} onChange={() => toggleSymbol(item.symbol)} /><span>{item.symbol}</span><small>{item.baseAsset}/USDT</small></label>)}
+                    {binanceSymbols.length === 0 ? <p className="panel-note">{symbolsStatus}</p> : null}
+                  </div>
+                </div> : null}
+              </div>
+              <small className="field-helper">Nguồn: Binance USDⓈ-M perpetual, chỉ lấy mã đang ở trạng thái TRADING.</small>
+            </div>
             <label className="config-field"><span>Chế độ PAPER</span><select value={config.paper_mode} onChange={(event) => setConfig({ ...config, paper_mode: event.target.value as PaperMode })}><option value="RESEARCH_PAPER">RESEARCH_PAPER</option><option value="VERIFIED_PAPER">VERIFIED_PAPER</option></select></label>
             <NumberField label="Vốn mô phỏng, USDT" value={config.initial_equity_usdt} step="100" min="1" onChange={(value) => setConfig({ ...config, initial_equity_usdt: value })} />
           </div>

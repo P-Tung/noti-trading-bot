@@ -95,16 +95,24 @@ h2 { margin-bottom: 0; font-size: 22px; line-height: 1.2; letter-spacing: -0.03e
 .config-field input, .config-field select { width: 100%; min-height: 44px; padding: 0 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); color: var(--ink); }
 .config-field input:focus, .config-field select:focus { border-color: var(--accent); outline: 2px solid rgba(130, 217, 189, 0.2); }
 .symbol-picker { grid-column: span 2; }
+.symbol-dropdown { position: relative; }
+.symbol-dropdown-trigger { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 48px; padding: 0 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--ink); font-size: 14px; text-align: left; cursor: pointer; }
+.symbol-dropdown-trigger:hover, .symbol-dropdown-trigger[aria-expanded="true"] { border-color: var(--accent); }
+.symbol-dropdown-menu { position: absolute; z-index: 10; top: calc(100% + 7px); left: 0; width: 100%; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-raised); box-shadow: 0 18px 44px rgba(0, 0, 0, 0.34); }
 .symbol-picker-toolbar { display: flex; align-items: center; gap: 10px; }
 .symbol-picker-toolbar > input { flex: 1; }
 .symbol-picker-toolbar > span, .field-helper { color: var(--muted); font-size: 12px; white-space: nowrap; }
 .selected-symbols { display: flex; flex-wrap: wrap; gap: 7px; min-height: 30px; padding: 3px 0; }
 .selected-symbol { min-height: 30px; padding: 0 9px; border: 1px solid rgba(130, 217, 189, 0.45); border-radius: 999px; background: rgba(130, 217, 189, 0.1); color: var(--accent-strong); font-size: 12px; }
-.symbol-list { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); max-height: 246px; overflow-y: auto; gap: 7px; padding: 10px; border: 1px solid var(--line); border-radius: 9px; background: rgba(11, 17, 24, 0.72); }
-.symbol-option { display: flex; align-items: center; gap: 7px; min-height: 38px; padding: 5px 7px; border-radius: 7px; color: var(--ink); cursor: pointer; }
+.symbol-dropdown-actions { display: flex; gap: 8px; margin: 10px 0; }
+.symbol-action { min-height: 32px; padding: 0 10px; border: 1px solid var(--line); border-radius: 7px; background: transparent; color: var(--accent-strong); font-size: 12px; cursor: pointer; }
+.symbol-action:hover { border-color: var(--accent); background: rgba(130, 217, 189, 0.08); }
+.symbol-list { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); max-height: 246px; overflow-y: auto; gap: 6px; padding: 10px; border: 1px solid var(--line); border-radius: 9px; background: rgba(11, 17, 24, 0.72); }
+.symbol-option { display: grid; grid-template-columns: 18px minmax(0, 1fr); grid-template-rows: auto auto; align-items: center; column-gap: 7px; min-width: 0; min-height: 44px; padding: 6px; border-radius: 7px; color: var(--ink); cursor: pointer; }
 .symbol-option:hover { background: rgba(130, 217, 189, 0.08); }
-.symbol-option input { accent-color: var(--accent); }
-.symbol-option small { margin-left: auto; color: var(--muted); font-size: 11px; }
+.symbol-option input { grid-row: 1 / span 2; width: 16px; height: 16px; accent-color: var(--accent); }
+.symbol-option span, .symbol-option small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.symbol-option small { color: var(--muted); font-size: 11px; }
 .config-warning { margin: 16px 0 0; color: var(--warning); font-size: 13px; }
 .profile-config-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
 .profile-config-card { padding: 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
@@ -139,6 +147,7 @@ h2 { margin-bottom: 0; font-size: 22px; line-height: 1.2; letter-spacing: -0.03e
   .symbol-picker { grid-column: auto; }
   .symbol-picker-toolbar { align-items: stretch; flex-direction: column; }
   .symbol-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .symbol-dropdown-menu { width: min(100%, 560px); }
   .config-actions { align-items: stretch; flex-direction: column; }
   .config-actions .primary-button, .config-actions .config-cancel { justify-content: center; width: 100%; }
   .config-actions .action-feedback { max-width: none; text-align: left; }
