@@ -16,7 +16,7 @@ from trade_brain.backtest import BacktestCase, run_backtest
 from trade_brain.claude import ClaudeSelector
 from trade_brain.collector import PublicSnapshotCollector
 from trade_brain.configuration import TradeBrainConfig
-from trade_brain.decision_worker import DecisionWorkerConfig, _configured_mode, _configured_symbols, run_decision_once
+from trade_brain.decision_worker import DecisionWorkerConfig, _configured_mode, run_decision_once
 from trade_brain.contracts import ClaudeDecision, PaperMode, Profile, QualityStatus, StrictModel, TradeCandidate
 from trade_brain.orchestration import CandidateRiskInput, DecisionSelector, run_decision_cycle
 from trade_brain.paper import MarketQuote, PaperAccount, PaperRecommendation, PaperState, PaperTradingEngine, PaperTradingError
@@ -231,7 +231,7 @@ def create_app(
                 results = await run_decision_once(
                     snapshot_store,
                     experiment_id,
-                    _configured_symbols(),
+                    runtime_config.symbols,
                     active_selector,
                     active_client,
                     active_paper_engine,

@@ -12,6 +12,7 @@ from trade_brain.storage import InMemorySnapshotStore
 from trade_brain.paper import PaperTradingEngine
 from trade_brain.app import create_app
 from trade_brain.app import _notify_milestone_reports
+from trade_brain.configuration import TradeBrainConfig
 from trade_brain.reporting import CohortScope, PaperReport
 from unittest.mock import patch
 
@@ -112,6 +113,23 @@ def test_snapshot_list_returns_recent_typed_data() -> None:
 
     assert response.status_code == 200
     assert response.json()["snapshots"][0]["symbol"] == "BTCUSDT"
+
+
+def test_evaluate_uses_saved_symbol_configuration(monkeypatch) -> None:
+    store = InMemorySnapshotStore()
+    configured_symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+    store.save_config(TradeBrainConfig.defaults().model_copy(update={"symbols": configured_symbols}))
+    received_symbols: list[str] = []
+
+    async def fake_run_decision_once(store, experiment_id, symbols, *args, **kwargs):
+        received_symbols.extend(symbols)
+        return []
+
+    monkeypatch.setattr("trade_brain.app.run_decision_once", fake_run_decision_once)
+    response = TestClient(create_app(store, NoTradeSelector())).post("/v1/evaluate")
+
+    assert response.status_code == 200
+    assert received_symbols == configured_symbols
 
 
 def test_decision_run_returns_paper_only_decisions() -> None:
