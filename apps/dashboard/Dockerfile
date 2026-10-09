@@ -10,4 +10,4 @@ RUN npm run build
 
 ENV NODE_ENV=production
 
-CMD ["sh", "-c", "npm run start -- -p ${PORT:-3000}"]
+CMD ["sh", "-c", "HOSTNAME=0.0.0.0 PORT=${PORT:-3000} node .next/standalone/server.js"]
