@@ -4,8 +4,8 @@ import type { ReactNode } from "react";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Trade V1 | Paper Lab",
-  description: "Paper-trading research dashboard for Trade V1",
+  title: "Trade V2 | Paper Lab",
+  description: "Paper-trading research dashboard for Trade V2",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {

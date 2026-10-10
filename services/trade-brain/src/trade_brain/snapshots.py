@@ -15,9 +15,9 @@ def create_snapshot(
     market_type: str = "BINANCE_USDM_PERPETUAL",
     data_mode: DataMode = DataMode.PRICE_ONLY,
     quality_status: QualityStatus = QualityStatus.VALID,
-    feature_version: str = "features-v1",
-    strategy_version: str = "strategies-v1",
-    policy_version: str = "policies-v1",
+    feature_version: str = "features-v2",
+    strategy_version: str = "strategies-v2",
+    policy_version: str = "policies-v2",
     probability_version: str | None = None,
     expiry_seconds: int = 60,
 ) -> MarketSnapshot:

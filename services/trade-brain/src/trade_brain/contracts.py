@@ -17,6 +17,13 @@ class DataMode(StrEnum):
     FULL_DATA = "FULL_DATA"
 
 
+class UniverseMode(StrEnum):
+    """How the worker chooses Binance symbols for a decision cycle."""
+
+    BINANCE_VOLUME = "BINANCE_VOLUME"
+    MANUAL = "MANUAL"
+
+
 class PaperMode(StrEnum):
     RESEARCH_PAPER = "RESEARCH_PAPER"
     VERIFIED_PAPER = "VERIFIED_PAPER"
@@ -99,6 +106,7 @@ class TradeCandidate(StrictModel):
     statistics_status: StatisticsStatus
     statistics: dict[str, object] = Field(default_factory=dict)
     eligible: bool = False
+    eligibility_reasons: list[str] = Field(default_factory=list)
 
 
 class ClaudeDecision(StrictModel):

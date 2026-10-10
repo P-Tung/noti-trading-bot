@@ -81,6 +81,7 @@ class ClaudeSelector:
             separators=(",", ":"),
         ).encode("utf-8")
         started_at = time.perf_counter()
+        usage: dict[str, object] = {}
         try:
             response = await self._client.post(
                 "/v1/messages",
@@ -93,6 +94,8 @@ class ClaudeSelector:
             )
             response.raise_for_status()
             body = response.json()
+            if isinstance(body, dict) and isinstance(body.get("usage"), dict):
+                usage = dict(body["usage"])
             return _extract_text(body)
         finally:
             self._last_audit = {
@@ -101,16 +104,18 @@ class ClaudeSelector:
                 "schema_version": CLAUDE_SCHEMA_VERSION,
                 "payload_hash": hashlib.sha256(payload_bytes).hexdigest(),
                 "latency_ms": round((time.perf_counter() - started_at) * 1000, 3),
+                "input_tokens": usage.get("input_tokens"),
+                "output_tokens": usage.get("output_tokens"),
             }
 
 
-CLAUDE_PROMPT_VERSION = "trade-v1-claude-prompt-v1"
-CLAUDE_SCHEMA_VERSION = "trade-v1-claude-schema-v1"
+CLAUDE_PROMPT_VERSION = "trade-v2-claude-prompt-v1"
+CLAUDE_SCHEMA_VERSION = "trade-v2-claude-schema-v1"
 
 
 def _system_prompt() -> str:
     return (
-        "You are a Trade V1 candidate evaluator. Use only the supplied snapshot and candidates. "
+        "You are a Trade V2 candidate evaluator. Use only the supplied snapshot and eligible candidates. "
         "Never invent prices, probabilities, risk values, or candidates. Select only eligible candidates. "
         "Return exactly one decision for each profile. Use WAIT only with a supplied watch candidate "
         f"and one or more allowed condition IDs: {', '.join(allowed_wait_condition_ids())}. "
@@ -121,7 +126,7 @@ def _system_prompt() -> str:
 
 
 def _user_prompt(snapshot: MarketSnapshot, candidates: list[TradeCandidate]) -> str:
-    eligible = [candidate.model_dump(mode="json") for candidate in candidates]
+    eligible = [candidate.model_dump(mode="json") for candidate in candidates if candidate.eligible]
     return json.dumps(
         {
             "snapshot": snapshot.model_dump(mode="json"),

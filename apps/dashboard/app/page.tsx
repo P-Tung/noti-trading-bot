@@ -317,10 +317,10 @@ export default function DashboardPage() {
   return (
     <main className="shell">
       <header className="topbar">
-        <a className="brand" href="#top" aria-label="Trade V1 trang chính">
+        <a className="brand" href="#top" aria-label="Trade V2 trang chính">
           <span className="brand-mark" aria-hidden="true">TV</span>
           <span>
-            <strong>Trade V1</strong>
+            <strong>Trade V2</strong>
             <small>Paper Lab</small>
           </span>
         </a>
@@ -347,7 +347,7 @@ export default function DashboardPage() {
 
       <section className="intro" id="top">
         <div>
-          <p className="eyebrow">Bộ não Trade V1 / Tổng quan</p>
+          <p className="eyebrow">Bộ não Trade V2 / Tổng quan</p>
           <h1>Kiểm chứng trước khi xuống tiền.</h1>
           <p className="intro-copy">
             Theo dõi quyết định của Claude, kết quả mô phỏng và bằng chứng thống kê trong cùng một nơi.

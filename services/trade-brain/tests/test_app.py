@@ -118,7 +118,11 @@ def test_snapshot_list_returns_recent_typed_data() -> None:
 def test_evaluate_uses_saved_symbol_configuration(monkeypatch) -> None:
     store = InMemorySnapshotStore()
     configured_symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
-    store.save_config(TradeBrainConfig.defaults().model_copy(update={"symbols": configured_symbols}))
+    store.save_config(
+        TradeBrainConfig.defaults().model_copy(
+            update={"symbols": configured_symbols, "universe_mode": "MANUAL"}
+        )
+    )
     received_symbols: list[str] = []
 
     async def fake_run_decision_once(store, experiment_id, symbols, *args, **kwargs):
@@ -138,6 +142,14 @@ def test_config_accepts_more_than_thirty_symbols() -> None:
     config = TradeBrainConfig.defaults().model_copy(update={"symbols": configured_symbols})
 
     assert config.symbols == configured_symbols
+
+
+def test_universe_scan_endpoint_returns_audit_records() -> None:
+    store = InMemorySnapshotStore()
+    response = TestClient(create_app(store)).get("/v1/universe/scans?limit=10")
+
+    assert response.status_code == 200
+    assert response.json() == {"scans": []}
 
 
 def test_decision_run_returns_paper_only_decisions() -> None:

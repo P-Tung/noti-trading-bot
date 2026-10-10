@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 
 type Profile = "PROACTIVE" | "BALANCED" | "CAUTIOUS";
 type PaperMode = "RESEARCH_PAPER" | "VERIFIED_PAPER";
+type UniverseMode = "BINANCE_VOLUME" | "MANUAL";
 
 type StrategyConfig = Record<string, number>;
 type BinanceSymbol = { symbol: string; baseAsset: string; quoteAsset: string; contractType: string };
@@ -19,10 +20,21 @@ type ProfilePolicy = {
   rolling_drawdown_stop_pct: number;
 };
 
+type UniverseConfig = {
+  min_quote_volume_24h_usdt: number;
+  refresh_seconds: number;
+  max_universe_age_seconds: number;
+  max_symbols: number | null;
+  min_history_days: number;
+  require_strategy_indicator_warmup: boolean;
+};
+
 type TradeBrainConfig = {
   config_version: string;
   paper_mode: PaperMode;
   symbols: string[];
+  universe_mode: UniverseMode;
+  universe: UniverseConfig;
   initial_equity_usdt: number;
   t1: StrategyConfig;
   t2: StrategyConfig;
@@ -162,7 +174,7 @@ export default function TradeBrainConfigPage() {
         <div>
           <p className="eyebrow">Trade Brain / Research controls</p>
           <h1>Hiệu chỉnh Trade Brain</h1>
-          <p className="intro-copy">Điều chỉnh các tham số nghiên cứu trong tài liệu V1. Tất cả thay đổi vẫn nằm trong PAPER mode.</p>
+          <p className="intro-copy">Điều chỉnh các tham số nghiên cứu theo bộ não V2. Tất cả thay đổi vẫn nằm trong PAPER mode.</p>
         </div>
         <span className="mode-badge"><span className="status-dot" /> PAPER ONLY</span>
       </header>
@@ -172,8 +184,13 @@ export default function TradeBrainConfigPage() {
           <div className="section-heading"><div><p className="eyebrow">Experiment</p><h2>Chế độ và dữ liệu</h2></div></div>
           <div className="config-grid config-grid-wide">
             <label className="config-field"><span>Phiên bản cấu hình</span><input value={config.config_version} onChange={(event) => setConfig({ ...config, config_version: event.target.value })} /></label>
+            <label className="config-field"><span>Nguồn universe V2</span><select value={config.universe_mode} onChange={(event) => setConfig({ ...config, universe_mode: event.target.value as UniverseMode })}><option value="BINANCE_VOLUME">Binance tự lọc volume ≥ 20 triệu USDT</option><option value="MANUAL">Tự chọn mã thủ công</option></select></label>
+            <NumberField label="Volume tối thiểu 24h, USDT" value={config.universe.min_quote_volume_24h_usdt} step="1000000" min="1" onChange={(value) => setConfig({ ...config, universe: { ...config.universe, min_quote_volume_24h_usdt: value } })} />
+            <NumberField label="Refresh universe, giây" value={config.universe.refresh_seconds} step="60" min="60" onChange={(value) => setConfig({ ...config, universe: { ...config.universe, refresh_seconds: value } })} />
+            <NumberField label="Tuổi tối đa universe, giây" value={config.universe.max_universe_age_seconds} step="60" min="60" onChange={(value) => setConfig({ ...config, universe: { ...config.universe, max_universe_age_seconds: value } })} />
+            <NumberField label="Lịch sử tối thiểu, ngày" value={config.universe.min_history_days} step="1" min="1" onChange={(value) => setConfig({ ...config, universe: { ...config.universe, min_history_days: value } })} />
             <div className="symbol-picker config-field">
-              <span>Mã giao dịch, chọn từ Binance</span>
+              <span>{config.universe_mode === "BINANCE_VOLUME" ? "Mã tham khảo từ Binance" : "Mã giao dịch, chọn từ Binance"}</span>
               <div className="symbol-dropdown">
                 <button className="symbol-dropdown-trigger" type="button" aria-expanded={isSymbolDropdownOpen} onClick={() => setIsSymbolDropdownOpen(!isSymbolDropdownOpen)}>
                   <span>{config.symbols.length ? `${config.symbols.length} mã đã chọn` : "Chọn mã giao dịch"}</span>
@@ -195,7 +212,7 @@ export default function TradeBrainConfigPage() {
                   </div>
                 </div> : null}
               </div>
-              <small className="field-helper">Nguồn: Binance USDⓈ-M perpetual, chỉ lấy mã đang ở trạng thái TRADING.</small>
+              <small className="field-helper">{config.universe_mode === "BINANCE_VOLUME" ? "V2 sẽ tự quét toàn bộ hợp đồng vĩnh cửu USDT TRADING, giữ mã có volume 24h từ 20 triệu USDT, không giới hạn 30 mã." : "Nguồn: Binance USDⓈ-M perpetual, chỉ lấy mã đang ở trạng thái TRADING."}</small>
             </div>
             <label className="config-field"><span>Chế độ PAPER</span><select value={config.paper_mode} onChange={(event) => setConfig({ ...config, paper_mode: event.target.value as PaperMode })}><option value="RESEARCH_PAPER">RESEARCH_PAPER</option><option value="VERIFIED_PAPER">VERIFIED_PAPER</option></select></label>
             <NumberField label="Vốn mô phỏng, USDT" value={config.initial_equity_usdt} step="1" min="1" onChange={(value) => setConfig({ ...config, initial_equity_usdt: value })} />

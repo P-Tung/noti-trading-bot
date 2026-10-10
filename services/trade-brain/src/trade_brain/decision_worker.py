@@ -5,7 +5,7 @@ import logging
 import os
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import datetime, timezone
 
 import httpx
 from trade_brain.binance import BinanceClientError, BinancePublicClient
@@ -22,6 +22,7 @@ from trade_brain.risk import CandidateStatistics, RiskContext
 from trade_brain.storage import InMemorySnapshotStore, SnapshotStore
 from trade_brain.strategy_pipeline import build_all_candidates_multi_timeframe
 from trade_brain.supabase_store import SupabaseSnapshotStore
+from trade_brain.universe import manual_universe, select_binance_universe
 from trade_brain.telegram import (
     TelegramCommandPoller,
     TelegramError,
@@ -75,7 +76,13 @@ async def run_decision_once(
     results: list[DecisionCycleResult] = []
     for symbol in symbols:
         try:
-            collected = await collector.collect_timeframes(experiment_id, symbol, TIMEFRAMES, now)
+            collected = await collector.collect_timeframes(
+                experiment_id,
+                symbol,
+                TIMEFRAMES,
+                now,
+                history_days=active_brain_config.universe.min_history_days,
+            )
         except (BinanceClientError, httpx.HTTPError, ValueError) as error:
             LOGGER.warning("Skipping decision cycle for %s: %s", symbol, error)
             continue
@@ -109,6 +116,7 @@ async def run_decision_once(
             risk_inputs,
             selector,
             policies=runtime_policies(active_brain_config),
+            pipeline_audit=pipeline.audit,
         )
         paper_result = _persist_cycle(store, snapshot, result, paper_engine)
         if on_recommendations is not None and paper_result.recommendations:
@@ -126,7 +134,7 @@ async def run_decision_once(
 
 
 async def run_forever() -> None:
-    """Run the Claude-to-paper cycle on the configured public symbols."""
+    """Run the V2 universe-to-Claude-to-paper cycle."""
     api_selector = ClaudeSelector.from_environment()
     store = _build_store()
     client = BinancePublicClient()
@@ -139,6 +147,8 @@ async def run_forever() -> None:
     experiment_id = os.environ.get("TRADE_V1_EXPERIMENT_ID", "trade-v1-local")
     cycle_lock = asyncio.Lock()
     initialisation_task: asyncio.Task[None] | None = None
+    universe_symbols: tuple[str, ...] = ()
+    universe_refreshed_at: datetime | None = None
 
     async def broadcast_immediate_trade(
         symbol: str,
@@ -148,14 +158,48 @@ async def run_forever() -> None:
             await telegram_notifier.send(format_immediate_recommendations(symbol, recommendations))
 
     async def evaluate(notify: bool) -> list[DecisionCycleResult]:
+        nonlocal universe_symbols, universe_refreshed_at
         if initialisation_task is not None:
             await initialisation_task
         async with cycle_lock:
             brain_config = _load_brain_config(store)
+            symbols = manual_universe(brain_config.symbols)
+            universe_mode = getattr(brain_config.universe_mode, "value", brain_config.universe_mode)
+            now = datetime.now(timezone.utc)
+            if universe_mode == "BINANCE_VOLUME":
+                refresh_due = (
+                    universe_refreshed_at is None
+                    or (now - universe_refreshed_at).total_seconds() >= brain_config.universe.refresh_seconds
+                )
+                if refresh_due:
+                    try:
+                        selection = await select_binance_universe(client, brain_config.universe, now)
+                    except (BinanceClientError, httpx.HTTPError, ValueError) as error:
+                        LOGGER.warning("V2 universe refresh failed: %s", error)
+                    else:
+                        save_universe_scan = getattr(store, "save_universe_scan", None)
+                        if callable(save_universe_scan):
+                            save_universe_scan(selection, brain_config)
+                        universe_symbols = selection.symbols
+                        universe_refreshed_at = now
+                        LOGGER.info(
+                            "V2 universe refreshed: scan_id=%s passed=%s exclusions=%s",
+                            selection.scan_id,
+                            selection.passed_count,
+                            selection.exclusion_counts,
+                        )
+                if universe_refreshed_at is not None and (
+                    now - universe_refreshed_at
+                ).total_seconds() > brain_config.universe.max_universe_age_seconds:
+                    universe_symbols = ()
+                symbols = universe_symbols
+                if not symbols:
+                    LOGGER.warning("V2 universe is empty, skipping AI and paper evaluation")
+                    return []
             return await run_decision_once(
                 store,
                 experiment_id,
-                brain_config.symbols,
+                symbols,
                 api_selector,
                 client,
                 paper_engine,

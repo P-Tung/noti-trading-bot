@@ -27,6 +27,7 @@ from trade_brain.telegram import TelegramError, TelegramNotifier, format_recomme
 from trade_brain.risk import CandidateStatistics, RiskContext
 from trade_brain.storage import InMemorySnapshotStore, SnapshotStore
 from trade_brain.supabase_store import SupabaseSnapshotStore
+from trade_brain.universe import manual_universe, select_binance_universe
 from trade_brain.validation import DecisionValidationError, validate_decision
 
 
@@ -137,7 +138,7 @@ def create_app(
     if callable(load_paper_accounts):
         for account in load_paper_accounts():
             active_paper_engine.restore_account(account)
-    service = FastAPI(title="Trade V1 Brain", version="0.1.0")
+    service = FastAPI(title="Trade V2 Brain", version="0.2.0")
 
     @service.get("/health")
     async def health() -> dict[str, str | bool]:
@@ -163,6 +164,15 @@ def create_app(
     async def get_config() -> dict[str, object]:
         """Return editable research settings, never credentials."""
         return {"config": runtime_config.model_dump(mode="json")}
+
+    @service.get("/v1/universe/scans")
+    async def list_universe_scans(limit: int = 20) -> dict[str, object]:
+        """Return recent Binance universe audits, including exclusion reasons."""
+        if not 1 <= limit <= 100:
+            raise HTTPException(status_code=422, detail="limit must be between 1 and 100")
+        loader = getattr(snapshot_store, "list_universe_scans", None)
+        scans = loader(limit) if callable(loader) else []
+        return {"scans": scans}
 
     @service.put("/v1/config")
     async def update_config(request: TradeBrainConfig) -> dict[str, object]:
@@ -195,6 +205,7 @@ def create_app(
             snapshot = await PublicSnapshotCollector(client, snapshot_store).collect(
                 request.experiment_id,
                 request.symbol,
+                now=None,
             )
         finally:
             await client.close()
@@ -214,15 +225,46 @@ def create_app(
             active_notifier = notifier
             owns_notifier = False
             try:
+                if active_notifier is None and os.environ.get("TELEGRAM_BOT_TOKEN") and os.environ.get("TELEGRAM_CHAT_ID"):
+                    active_notifier = TelegramNotifier.from_environment()
+                    owns_notifier = True
+
+                symbols = manual_universe(runtime_config.symbols)
+                universe_mode = getattr(runtime_config.universe_mode, "value", runtime_config.universe_mode)
+                universe_summary: dict[str, object] = {
+                    "mode": universe_mode,
+                    "symbol_count": len(symbols),
+                }
+                if universe_mode == "BINANCE_VOLUME":
+                    selection = await select_binance_universe(active_client, runtime_config.universe)
+                    save_universe_scan = getattr(snapshot_store, "save_universe_scan", None)
+                    if callable(save_universe_scan):
+                        save_universe_scan(selection, runtime_config)
+                    symbols = selection.symbols
+                    universe_summary = {
+                        "mode": universe_mode,
+                        "scan_id": selection.scan_id,
+                        "symbol_count": selection.passed_count,
+                        "input_ticker_count": selection.input_ticker_count,
+                        "registry_count": selection.registry_count,
+                        "exclusion_counts": selection.exclusion_counts,
+                    }
+                    if not symbols:
+                        return {
+                            "status": "ok",
+                            "message": "Universe V2 chưa có mã đạt volume 24h tối thiểu.",
+                            "evaluated_snapshot_ids": [],
+                            "decision_count": 0,
+                            "recommendation_count": 0,
+                            "universe": universe_summary,
+                        }
+
                 if active_selector is None:
                     try:
                         active_selector = ClaudeSelector.from_environment()
                     except ValueError as error:
                         raise HTTPException(status_code=503, detail="Claude selector is not configured") from error
                     owns_selector = True
-                if active_notifier is None and os.environ.get("TELEGRAM_BOT_TOKEN") and os.environ.get("TELEGRAM_CHAT_ID"):
-                    active_notifier = TelegramNotifier.from_environment()
-                    owns_notifier = True
 
                 recommendation_ids_before = {
                     recommendation.recommendation_id
@@ -231,7 +273,7 @@ def create_app(
                 results = await run_decision_once(
                     snapshot_store,
                     experiment_id,
-                    runtime_config.symbols,
+                    symbols,
                     active_selector,
                     active_client,
                     active_paper_engine,
@@ -255,6 +297,7 @@ def create_app(
                     "evaluated_snapshot_ids": [result.snapshot_id for result in results],
                     "decision_count": decision_count,
                     "recommendation_count": recommendation_count,
+                    "universe": universe_summary,
                 }
             finally:
                 if owns_selector and isinstance(active_selector, ClaudeSelector):
@@ -353,6 +396,7 @@ def create_app(
             },
             "decisions": [decision.model_dump(mode="json") for decision in result.decisions],
             "claude_audit": result.claude_audit,
+            "gate_audit": result.gate_audit,
             "validation_errors": {
                 profile.value: error for profile, error in result.validation_errors.items()
             },

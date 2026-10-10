@@ -269,6 +269,7 @@ def build_strategy_candidates(
             horizon_bars=setup.horizon_bars,
             statistics_status=statistics_status,
             eligible=eligible,
+            eligibility_reasons=[] if eligible else ["WAIT_15M_CONFIRMATION"],
         )
         for profile, (stage, eligible) in stages.items()
     ]

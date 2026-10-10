@@ -1,6 +1,6 @@
 """Public Binance data collection into immutable Trade Brain snapshots."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 
@@ -8,11 +8,11 @@ from trade_brain.binance import BinanceClientError, BinanceKline, BinancePublicC
 from dataclasses import dataclass
 
 from trade_brain.contracts import FeatureValue, MarketSnapshot, QualityStatus
-from trade_brain.market_data import Bar, PivotKind, atr_wilder, confirmed_pivots, ema, relative_volume
+from trade_brain.market_data import Bar, PivotKind, adx_wilder, atr_wilder, confirmed_pivots, ema, relative_volume
 from trade_brain.snapshots import create_snapshot
 from trade_brain.storage import SnapshotStore
 
-TIMEFRAMES = ("1d", "4h", "1h", "15m", "5m")
+TIMEFRAMES = ("1d", "4h", "1h", "15m")
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,17 +51,28 @@ class PublicSnapshotCollector:
         symbol: str,
         timeframes: tuple[str, ...] = TIMEFRAMES,
         now: datetime | None = None,
+        history_days: int = 180,
     ) -> CollectedMarketData:
         """Fetch closed candles for all requested timeframes before persisting one snapshot."""
         if not timeframes or any(timeframe not in TIMEFRAMES for timeframe in timeframes):
-            raise ValueError("timeframes must be selected from the supported Trade V1 timeframes")
+            raise ValueError("timeframes must be selected from the supported Trade V2 timeframes")
         decision_time = now or datetime.now(timezone.utc)
+        if history_days < 1:
+            raise ValueError("history_days must be positive")
         bars_by_timeframe: dict[str, list[Bar]] = {}
         for timeframe in timeframes:
-            raw_klines = await self._client.get_klines(symbol, timeframe, 250)
+            raw_klines = await _load_klines(
+                self._client,
+                symbol,
+                timeframe,
+                decision_time,
+                _history_bars(timeframe, history_days),
+                history_days,
+            )
             closed_klines = _closed_klines(raw_klines, decision_time)
-            if len(closed_klines) < 20:
-                raise ValueError(f"at least 20 closed {timeframe} candles are required")
+            minimum_bars = 250 if timeframe == "1d" and callable(getattr(self._client, "get_klines_history", None)) else 20
+            if len(closed_klines) < minimum_bars:
+                raise ValueError(f"at least {minimum_bars} closed {timeframe} candles are required")
             bars_by_timeframe[timeframe] = [_to_bar(kline) for kline in closed_klines]
         features = _features_for_timeframes(bars_by_timeframe, decision_time)
         features.update(await _current_market_features(symbol, decision_time, self._client))
@@ -74,6 +85,26 @@ class PublicSnapshotCollector:
         )
         self._store.save_snapshot(snapshot)
         return CollectedMarketData(snapshot, bars_by_timeframe)
+
+
+async def _load_klines(
+    client: BinancePublicClient,
+    symbol: str,
+    timeframe: str,
+    decision_time: datetime,
+    max_bars: int,
+    history_days: int,
+) -> list[BinanceKline]:
+    history_loader = getattr(client, "get_klines_history", None)
+    if callable(history_loader):
+        start_time_ms = int((decision_time - timedelta(days=history_days)).timestamp() * 1000)
+        return await history_loader(symbol, timeframe, start_time_ms, max_bars=max_bars)
+    return await client.get_klines(symbol, timeframe, min(250, max_bars))
+
+
+def _history_bars(timeframe: str, history_days: int) -> int:
+    bars_per_day = {"1d": 1, "4h": 6, "1h": 24, "15m": 96}
+    return max(300 if timeframe == "1d" else 1_500, history_days * bars_per_day[timeframe])
 
 
 def _closed_klines(klines: list[BinanceKline], now: datetime) -> list[BinanceKline]:
@@ -135,7 +166,7 @@ async def _current_market_features(
     for name, fetcher in fetchers.items():
         try:
             results[name] = await fetcher(symbol)
-        except (BinanceClientError, httpx.HTTPError):
+        except (BinanceClientError, httpx.HTTPError, KeyError, TypeError, ValueError):
             features[f"{name}_quality"] = FeatureValue(
                 value=None,
                 unit="status",
@@ -278,6 +309,16 @@ def _features_for_timeframes(
         if volume_ratio is None:
             raise ValueError(f"latest relative volume is unavailable for {timeframe}")
         features[f"close_{timeframe}"] = _feature(latest_bar.close, "USDT", observed_at)
+        features[f"data_age_ms_{timeframe}"] = _feature(
+            max(0.0, (observed_at - latest_bar.closed_at).total_seconds() * 1000),
+            "milliseconds",
+            observed_at,
+        )
+        features[f"bar_gap_count_{timeframe}"] = _feature(
+            _bar_gap_count(bars, timeframe),
+            "bars",
+            observed_at,
+        )
         features[f"atr_{timeframe}"] = _feature(latest_atr, "USDT", observed_at)
         features[f"atr_pct_{timeframe}"] = _feature(100 * latest_atr / latest_bar.close, "percent", observed_at)
         features[f"relative_volume_{timeframe}"] = _feature(volume_ratio, "ratio", observed_at)
@@ -286,6 +327,11 @@ def _features_for_timeframes(
             and latest_bar.quote_volume > 0
             and latest_bar.taker_buy_quote_volume is not None
         ):
+            features[f"delta_quote_{timeframe}"] = _feature(
+                (2 * latest_bar.taker_buy_quote_volume) - latest_bar.quote_volume,
+                "USDT_taker_proxy",
+                observed_at,
+            )
             features[f"taker_buy_fraction_{timeframe}"] = _feature(
                 latest_bar.taker_buy_quote_volume / latest_bar.quote_volume,
                 "ratio",
@@ -341,8 +387,12 @@ def _features_for_timeframes(
         )
         ema20_values = ema(bars, 20)
         ema50_values = ema(bars, 50)
+        ema200_values = ema(bars, 200)
+        adx_values = adx_wilder(bars)
         ema20 = ema20_values[-1]
         ema50 = ema50_values[-1]
+        ema200 = ema200_values[-1]
+        adx = adx_values[-1]
         if ema20 is not None:
             features[f"ema20_{timeframe}"] = _feature(ema20, "USDT", observed_at)
             features[f"ema20_distance_atr_{timeframe}"] = _feature(
@@ -364,7 +414,36 @@ def _features_for_timeframes(
                 "ATR",
                 observed_at,
             )
+        if ema20 is not None and ema50 is not None:
+            features[f"ema20_50_gap_atr_{timeframe}"] = _feature(
+                (ema20 - ema50) / latest_atr,
+                "ATR",
+                observed_at,
+            )
+        if ema200 is not None:
+            features[f"ema200_{timeframe}"] = _feature(ema200, "USDT", observed_at)
+            features[f"ema200_distance_atr_{timeframe}"] = _feature(
+                (latest_bar.close - ema200) / latest_atr,
+                "ATR",
+                observed_at,
+            )
+        if adx is not None:
+            features[f"adx14_{timeframe}"] = _feature(adx, "index", observed_at)
     return features
+
+
+_TIMEFRAME_SECONDS = {"1d": 86400, "4h": 14400, "1h": 3600, "15m": 900, "5m": 300}
+
+
+def _bar_gap_count(bars: list[Bar], timeframe: str) -> int:
+    """Count missing expected candle slots without treating the current bar as a gap."""
+    interval = _TIMEFRAME_SECONDS[timeframe]
+    gaps = 0
+    for previous, current in zip(bars, bars[1:]):
+        elapsed = (current.opened_at - previous.opened_at).total_seconds()
+        if elapsed > interval:
+            gaps += max(0, round(elapsed / interval) - 1)
+    return gaps
 
 
 def _structure_state(bars: list[Bar]) -> str:

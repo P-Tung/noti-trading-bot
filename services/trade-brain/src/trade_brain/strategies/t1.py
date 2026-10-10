@@ -85,6 +85,7 @@ def build_t1_candidates(
             horizon_bars=96,
             statistics_status=statistics_status,
             eligible=setup.trigger_reached or profile is Profile.PROACTIVE,
+            eligibility_reasons=[] if setup.trigger_reached or profile is Profile.PROACTIVE else ["WAIT_15M_CONFIRMATION"],
         )
         for profile in Profile
     ]

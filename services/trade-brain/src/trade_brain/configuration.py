@@ -1,8 +1,8 @@
-"""Validated, server-owned Trade V1 research configuration."""
+"""Validated, server-owned Trade V2 research configuration."""
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
-from trade_brain.contracts import PaperMode, Profile, StrictModel
+from trade_brain.contracts import PaperMode, Profile, StrictModel, UniverseMode
 from trade_brain.strategies.alternatives import R1Config, T2Config
 from trade_brain.strategies.t1 import T1Config
 from trade_brain.risk import RiskPolicy
@@ -19,23 +19,54 @@ class ProfilePolicyConfig(StrictModel):
     rolling_drawdown_stop_pct: float = Field(gt=0, le=1)
 
 
+class UniverseConfig(StrictModel):
+    """V2 Binance USDⓈ-M perpetual universe policy."""
+
+    exchange: str = "BINANCE"
+    asset_class: str = "CRYPTO"
+    contract_type: str = "PERPETUAL"
+    quote_asset: str = "USDT"
+    margin_asset: str = "USDT"
+    status: str = "TRADING"
+    min_quote_volume_24h_usdt: float = Field(default=20_000_000, gt=0)
+    refresh_seconds: int = Field(default=900, ge=60)
+    max_universe_age_seconds: int = Field(default=1800, ge=60)
+    max_symbols: int | None = Field(default=None, gt=0)
+    min_history_days: int = Field(default=180, ge=1)
+    require_strategy_indicator_warmup: bool = True
+
+    @model_validator(mode="after")
+    def validate_age_window(self) -> "UniverseConfig":
+        if self.max_universe_age_seconds < self.refresh_seconds * 2:
+            raise ValueError("max_universe_age_seconds must cover at least two refresh cycles")
+        return self
+
+
 class TradeBrainConfig(StrictModel):
-    """Settings from the V1 specification, never secrets or live-trading keys."""
+    """V2 research settings, never secrets or live-trading keys."""
 
     config_version: str = Field(min_length=1, max_length=80)
     paper_mode: PaperMode = PaperMode.RESEARCH_PAPER
-    symbols: list[str] = Field(min_length=1)
+    symbols: list[str] = Field(default_factory=list)
+    universe_mode: UniverseMode = UniverseMode.BINANCE_VOLUME
+    universe: UniverseConfig = UniverseConfig()
     initial_equity_usdt: float = Field(gt=0)
     t1: T1Config = T1Config()
     t2: T2Config = T2Config()
     r1: R1Config = R1Config()
     profiles: dict[Profile, ProfilePolicyConfig]
 
+    @model_validator(mode="after")
+    def validate_symbol_source(self) -> "TradeBrainConfig":
+        if self.universe_mode is UniverseMode.MANUAL and not self.symbols:
+            raise ValueError("symbols must contain at least one symbol in MANUAL mode")
+        return self
+
     @classmethod
     def defaults(cls) -> "TradeBrainConfig":
         return cls(
-            config_version="config-v1",
-            symbols=["BTCUSDT", "ETHUSDT"],
+            config_version="config-v2",
+            symbols=[],
             initial_equity_usdt=10000,
             profiles={
                 Profile.PROACTIVE: ProfilePolicyConfig(

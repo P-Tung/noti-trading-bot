@@ -69,7 +69,7 @@ class ClaudeTests(unittest.TestCase):
         result, audit = asyncio.run(run())
         self.assertEqual(len(result.decisions), 3)
         self.assertEqual(audit["model"], "test-model")
-        self.assertEqual(audit["prompt_version"], "trade-v1-claude-prompt-v1")
+        self.assertEqual(audit["prompt_version"], "trade-v2-claude-prompt-v1")
         self.assertEqual(len(audit["payload_hash"]), 64)
         self.assertGreaterEqual(audit["latency_ms"], 0)
 

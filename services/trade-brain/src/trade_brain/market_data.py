@@ -81,6 +81,52 @@ def ema(bars: list[Bar], period: int) -> list[float | None]:
     return values
 
 
+def adx_wilder(bars: list[Bar], period: int = 14) -> list[float | None]:
+    """Calculate non-directional Wilder ADX without early neutral values."""
+    if period <= 0:
+        raise ValueError("period must be positive")
+    values: list[float | None] = [None] * len(bars)
+    if len(bars) < (period * 2) + 1:
+        return values
+    true_ranges: list[float] = []
+    plus_dm: list[float] = []
+    minus_dm: list[float] = []
+    for index in range(1, len(bars)):
+        current = bars[index]
+        previous = bars[index - 1]
+        true_ranges.append(true_range(current, previous))
+        up_move = current.high - previous.high
+        down_move = previous.low - current.low
+        plus_dm.append(up_move if up_move > down_move and up_move > 0 else 0.0)
+        minus_dm.append(down_move if down_move > up_move and down_move > 0 else 0.0)
+    tr_smoothed = sum(true_ranges[:period])
+    plus_smoothed = sum(plus_dm[:period])
+    minus_smoothed = sum(minus_dm[:period])
+    dx_values: list[float] = []
+    for index in range(period - 1, len(true_ranges)):
+        if index > period - 1:
+            tr_smoothed = tr_smoothed - tr_smoothed / period + true_ranges[index]
+            plus_smoothed = plus_smoothed - plus_smoothed / period + plus_dm[index]
+            minus_smoothed = minus_smoothed - minus_smoothed / period + minus_dm[index]
+        if tr_smoothed <= 0:
+            dx_values.append(0.0)
+            continue
+        plus_di = 100 * plus_smoothed / tr_smoothed
+        minus_di = 100 * minus_smoothed / tr_smoothed
+        denominator = plus_di + minus_di
+        dx_values.append(0.0 if denominator <= 0 else 100 * abs(plus_di - minus_di) / denominator)
+    if len(dx_values) < period:
+        return values
+    first_adx = sum(dx_values[:period]) / period
+    adx_index = (period - 1) + period
+    values[adx_index] = first_adx
+    current_adx = first_adx
+    for dx_index in range(period, len(dx_values)):
+        current_adx = ((current_adx * (period - 1)) + dx_values[dx_index]) / period
+        values[adx_index + dx_index - period + 1] = current_adx
+    return values
+
+
 def confirmed_pivots(
     bars: list[Bar],
     left: int = 3,

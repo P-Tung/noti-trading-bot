@@ -12,6 +12,7 @@ from trade_brain.orchestration import DecisionCycleResult
 from trade_brain.paper import PaperAccount, PaperRecommendation, PaperState
 from trade_brain.reporting import PaperReport
 from trade_brain.contracts import Profile
+from trade_brain.universe import UniverseSelection
 
 
 class SupabaseQuery(Protocol):
@@ -104,6 +105,43 @@ class SupabaseSnapshotStore:
         if getattr(response, "error", None):
             raise RuntimeError(f"Supabase config save failed: {response.error}")
 
+    def save_universe_scan(self, selection: UniverseSelection, config: TradeBrainConfig) -> None:
+        """Persist one V2 universe refresh and its exclusion counts."""
+        response = self._client.table("universe_scans").upsert(
+            {
+                "scan_id": selection.scan_id,
+                "observed_at": selection.observed_at.isoformat(),
+                "exchange": config.universe.exchange,
+                "market_type": "BINANCE_USDM_PERPETUAL",
+                "quote_asset": config.universe.quote_asset,
+                "min_quote_volume_24h_usdt": config.universe.min_quote_volume_24h_usdt,
+                "input_ticker_count": selection.input_ticker_count,
+                "registry_count": selection.registry_count,
+                "passed_count": selection.passed_count,
+                "passed_symbols": list(selection.symbols),
+                "exclusion_counts": selection.exclusion_counts,
+                "config_version": config.config_version,
+            }
+        ).execute()
+        if getattr(response, "error", None):
+            raise RuntimeError(f"Supabase universe scan save failed: {response.error}")
+
+    def list_universe_scans(self, limit: int = 20) -> list[dict[str, object]]:
+        """Read recent universe audits for the dashboard and operators."""
+        if not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        response = (
+            self._client.table("universe_scans")
+            .select("*")
+            .order("observed_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        if getattr(response, "error", None):
+            raise RuntimeError(f"Supabase universe scan list failed: {response.error}")
+        rows = getattr(response, "data", None)
+        return [dict(row) for row in rows] if isinstance(rows, list) else []
+
     def list_telegram_chat_ids(self) -> tuple[str, ...]:
         """Load all Telegram chats that opted in with /start."""
         response = (
@@ -132,9 +170,9 @@ class SupabaseSnapshotStore:
     def ensure_experiment(
         self,
         experiment_id: str,
-        name: str = "Trade V1 Paper Research",
+        name: str = "Trade V2 Paper Research",
         data_mode: str = "PRICE_ONLY",
-        config_version: str = "config-v1",
+        config_version: str = "config-v2",
         initial_equity_usdt: float = 10000,
         paper_mode: PaperMode = PaperMode.RESEARCH_PAPER,
     ) -> None:
@@ -218,6 +256,7 @@ class SupabaseSnapshotStore:
                     "statistics": candidate.statistics,
                     "eligibility": {
                         "eligible": candidate.eligible,
+                        "reasons": candidate.eligibility_reasons,
                         "risk_codes": list(risk_result.codes),
                         "risk_budget_usdt": risk_result.risk_budget_usdt,
                         "quantity_allowed": risk_result.quantity_allowed,
@@ -247,6 +286,7 @@ class SupabaseSnapshotStore:
                     "reason_codes": decision.reason_codes,
                     "evidence_ids": decision.evidence_ids,
                     "summary_vi": decision.summary_vi,
+                    "gate_audit": result.gate_audit,
                     "validation_status": validation_status,
                     "raw_response": decision.model_dump(mode="json"),
                     "model": _audit_value(result.claude_audit, "model"),

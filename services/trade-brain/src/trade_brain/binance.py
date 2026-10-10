@@ -86,6 +86,41 @@ class BinancePublicClient:
             raise BinanceClientError("Binance klines response must be a list")
         return [self._parse_kline(item) for item in payload]
 
+    async def get_klines_history(
+        self,
+        symbol: str,
+        interval: str,
+        start_time_ms: int,
+        end_time_ms: int | None = None,
+        max_bars: int = 1500,
+    ) -> list[BinanceKline]:
+        """Page completed klines without silently truncating the requested history."""
+        if start_time_ms < 0 or max_bars < 1:
+            raise ValueError("start_time_ms and max_bars must be positive")
+        collected: list[BinanceKline] = []
+        cursor = start_time_ms
+        while len(collected) < max_bars:
+            remaining = min(1500, max_bars - len(collected))
+            params: dict[str, str | int] = {
+                "symbol": symbol,
+                "interval": interval,
+                "limit": remaining,
+                "startTime": cursor,
+            }
+            if end_time_ms is not None:
+                params["endTime"] = end_time_ms
+            payload = await self._get("/fapi/v1/klines", params)
+            if not isinstance(payload, list) or not payload:
+                break
+            page = [self._parse_kline(item) for item in payload]
+            collected.extend(page)
+            last_opened = page[-1].opened_at_ms
+            next_cursor = last_opened + _interval_milliseconds(interval)
+            if next_cursor <= cursor or len(page) < remaining:
+                break
+            cursor = next_cursor
+        return collected[:max_bars]
+
     async def get_mark_price(self, symbol: str) -> dict[str, float | int | str]:
         """Fetch current mark price and funding metadata."""
         self._validate_request(symbol, "1m", 1)
@@ -124,6 +159,31 @@ class BinancePublicClient:
             "volume": float(payload["volume"]),
             "trade_count": int(payload["count"]),
         }
+
+    async def get_24h_tickers(self) -> list[dict[str, float | int | str]]:
+        """Fetch the complete USDⓈ-M 24-hour ticker set for V2 universe filtering."""
+        payload = await self._get("/fapi/v1/ticker/24hr", {})
+        if not isinstance(payload, list):
+            raise BinanceClientError("Binance 24-hour ticker response must be a list")
+        return [
+            {
+                "symbol": str(item["symbol"]),
+                "quote_volume": float(item["quoteVolume"]),
+                "volume": float(item["volume"]),
+                "trade_count": int(item["count"]),
+                "window_start_ms": int(item.get("openTime", 0)),
+                "window_end_ms": int(item.get("closeTime", 0)),
+            }
+            for item in payload
+            if isinstance(item, dict)
+        ]
+
+    async def get_exchange_info(self) -> list[dict[str, object]]:
+        """Fetch the contract registry used by the V2 universe gate."""
+        payload = await self._get("/fapi/v1/exchangeInfo", {})
+        if not isinstance(payload, dict) or not isinstance(payload.get("symbols"), list):
+            raise BinanceClientError("Binance exchange-info response must contain symbols")
+        return [item for item in payload["symbols"] if isinstance(item, dict)]
 
     async def get_open_interest_history(
         self,
@@ -248,3 +308,10 @@ class BinancePublicClient:
                 raise BinanceClientError("Binance depth level has an invalid shape")
             parsed.append((float(level[0]), float(level[1])))
         return tuple(parsed)
+
+
+def _interval_milliseconds(interval: str) -> int:
+    units = {"m": 60_000, "h": 3_600_000, "d": 86_400_000}
+    if len(interval) < 2 or interval[-1] not in units:
+        raise ValueError(f"unsupported Binance interval: {interval}")
+    return int(interval[:-1]) * units[interval[-1]]
