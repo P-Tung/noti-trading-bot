@@ -353,6 +353,19 @@ function HistoryWorkspace({
   const pageCount = Math.max(1, Math.ceil(activeRows.length / pageSize));
   const pageRows = activeRows.slice((page - 1) * pageSize, page * pageSize);
   const hasFilters = Boolean(normalizedSearch) || decisionFilter !== "ALL" || qualityFilter !== "ALL" || stateFilter !== "ALL" || queueFilter !== "ALL";
+  const emptyTitle = isLoading
+    ? "Đang tải dữ liệu..."
+    : connectionError
+      ? "Chưa thể tải lịch sử"
+      : activeTab === "journal"
+        ? "Chưa có paper recommendation"
+        : "Chưa có bản ghi phù hợp";
+  const emptyDescription = connectionError
+    ?? (activeTab === "journal"
+      ? "Các lần NO_TRADE không tạo paper journal. Hãy xem tab Quyết định hoặc Queue audit để kiểm tra các lần quét này."
+      : hasFilters
+        ? "Hãy thử đổi bộ lọc hoặc từ khóa tìm kiếm."
+        : "Dữ liệu sẽ xuất hiện sau lần đánh giá đầu tiên.");
 
   const clearFilters = () => {
     setSearch("");
@@ -448,8 +461,8 @@ function HistoryWorkspace({
       <div className="history-table-wrap">
         {pageRows.length === 0 ? (
           <div className="history-empty">
-            <strong>{isLoading ? "Đang tải dữ liệu..." : connectionError ? "Chưa thể tải lịch sử" : "Chưa có bản ghi phù hợp"}</strong>
-            <span>{connectionError ?? (hasFilters ? "Hãy thử đổi bộ lọc hoặc từ khóa tìm kiếm." : "Dữ liệu sẽ xuất hiện sau lần đánh giá đầu tiên.")}</span>
+            <strong>{emptyTitle}</strong>
+            <span>{emptyDescription}</span>
           </div>
         ) : (
           <table className="history-table">
