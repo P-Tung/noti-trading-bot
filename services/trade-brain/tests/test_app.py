@@ -124,16 +124,19 @@ def test_evaluate_uses_saved_symbol_configuration(monkeypatch) -> None:
         )
     )
     received_symbols: list[str] = []
+    notifier = RecordingNotifier()
 
     async def fake_run_decision_once(store, experiment_id, symbols, *args, **kwargs):
         received_symbols.extend(symbols)
         return []
 
     monkeypatch.setattr("trade_brain.app.run_decision_once", fake_run_decision_once)
-    response = TestClient(create_app(store, NoTradeSelector())).post("/v1/evaluate")
+    response = TestClient(create_app(store, NoTradeSelector(), notifier=notifier)).post("/v1/evaluate")
 
     assert response.status_code == 200
     assert received_symbols == configured_symbols
+    assert "🔄 BẮT ĐẦU QUÉT PAPER" in notifier.messages[0]
+    assert "📊 KẾT QUẢ ĐÁNH GIÁ PAPER" in notifier.messages[-1]
 
 
 def test_config_accepts_more_than_thirty_symbols() -> None:

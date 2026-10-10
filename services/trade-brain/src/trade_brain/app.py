@@ -29,6 +29,7 @@ from trade_brain.telegram import (
     TelegramError,
     TelegramNotifier,
     configured_chat_ids,
+    format_evaluation,
     format_recommendation,
     format_report,
 )
@@ -369,6 +370,8 @@ def create_app(
                 ]
                 result_summary = build_evaluation_summary(results, new_recommendations, snapshot_symbols)
                 evaluation_progress.finish(run_id, result_summary)
+                if active_notifier is not None:
+                    await active_notifier.send(format_evaluation(results, new_recommendations, snapshot_symbols))
                 return {
                     "status": "ok",
                     "message": f"Đã đánh giá {len(results)} mã, tạo {decision_count} quyết định PAPER.",
