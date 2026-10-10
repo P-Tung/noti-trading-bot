@@ -183,7 +183,7 @@ export default function TradeBrainConfigPage() {
         <section className="config-section">
           <div className="section-heading"><div><p className="eyebrow">Experiment</p><h2>Chế độ và dữ liệu</h2></div></div>
           <div className="config-grid config-grid-wide">
-            <label className="config-field"><span>Phiên bản cấu hình</span><input value={config.config_version} onChange={(event) => setConfig({ ...config, config_version: event.target.value })} /></label>
+            <label className="config-field"><span>Phiên bản cấu hình V2</span><input value={config.config_version} readOnly /></label>
             <label className="config-field"><span>Nguồn universe V2</span><select value={config.universe_mode} onChange={(event) => setConfig({ ...config, universe_mode: event.target.value as UniverseMode })}><option value="BINANCE_VOLUME">Binance tự lọc volume ≥ 20 triệu USDT</option><option value="MANUAL">Tự chọn mã thủ công</option></select></label>
             <NumberField label="Volume tối thiểu 24h, USDT" value={config.universe.min_quote_volume_24h_usdt} step="1000000" min="1" onChange={(value) => setConfig({ ...config, universe: { ...config.universe, min_quote_volume_24h_usdt: value } })} />
             <NumberField label="Refresh universe, giây" value={config.universe.refresh_seconds} step="60" min="60" onChange={(value) => setConfig({ ...config, universe: { ...config.universe, refresh_seconds: value } })} />

@@ -9,6 +9,7 @@ import httpx
 
 from trade_brain.paper import PaperRecommendation, PaperState
 from trade_brain.reporting import PaperReport
+from trade_brain.evaluation_reporting import build_evaluation_summary, format_evaluation_summary
 
 if TYPE_CHECKING:
     from trade_brain.orchestration import DecisionCycleResult
@@ -31,6 +32,23 @@ def _normalise_chat_ids(chat_ids: str | Sequence[str]) -> tuple[str, ...]:
         values = tuple(chat_ids)
     normalised = tuple(dict.fromkeys(str(chat_id).strip() for chat_id in values if str(chat_id).strip()))
     return normalised
+
+
+def _split_telegram_message(message: str, limit: int = 4096) -> tuple[str, ...]:
+    """Split long audit messages on line boundaries without dropping queue rows."""
+    chunks: list[str] = []
+    current = ""
+    for line in message.splitlines():
+        candidate = f"{current}\n{line}" if current else line
+        if len(candidate) <= limit:
+            current = candidate
+            continue
+        if current:
+            chunks.append(current)
+        current = line[:limit]
+    if current:
+        chunks.append(current)
+    return tuple(chunks) or (message[:limit],)
 
 
 class TelegramNotifier:
@@ -67,27 +85,28 @@ class TelegramNotifier:
         """Send one message and fail explicitly when Telegram rejects it."""
         if not message.strip():
             raise ValueError("Telegram message cannot be empty")
-        for chat_id in self._chat_ids:
-            for attempt in range(2):
-                try:
-                    response = await self._client.post(
-                        f"/bot{self._bot_token}/sendMessage",
-                        json={"chat_id": chat_id, "text": message[:4096]},
-                    )
-                    if response.status_code == 429 or response.status_code >= 500:
+        for chunk in _split_telegram_message(message):
+            for chat_id in self._chat_ids:
+                for attempt in range(2):
+                    try:
+                        response = await self._client.post(
+                            f"/bot{self._bot_token}/sendMessage",
+                            json={"chat_id": chat_id, "text": chunk},
+                        )
+                        if response.status_code == 429 or response.status_code >= 500:
+                            if attempt == 0:
+                                await asyncio.sleep(0.2)
+                                continue
+                        response.raise_for_status()
+                        body = response.json()
+                        if not isinstance(body, dict) or body.get("ok") is not True:
+                            raise TelegramError("Telegram rejected the message")
+                        break
+                    except httpx.RequestError:
                         if attempt == 0:
                             await asyncio.sleep(0.2)
                             continue
-                    response.raise_for_status()
-                    body = response.json()
-                    if not isinstance(body, dict) or body.get("ok") is not True:
-                        raise TelegramError("Telegram rejected the message")
-                    break
-                except httpx.RequestError:
-                    if attempt == 0:
-                        await asyncio.sleep(0.2)
-                        continue
-                    raise
+                        raise
 
 
 class TelegramCommandPoller:
@@ -278,45 +297,8 @@ def format_evaluation(
     recommendations: Sequence[PaperRecommendation],
     snapshot_symbols: Mapping[str, str] | None = None,
 ) -> str:
-    """Format every on-demand evaluation with compact visual status markers."""
-    recommendation_profiles = {recommendation.profile for recommendation in recommendations}
-    visible_results: list[tuple[str, list[str]]] = []
-    visible_decision_count = 0
-    for result in results:
-        symbol = (snapshot_symbols or {}).get(result.snapshot_id, result.snapshot_id[:12])
-        decision_lines = []
-        for decision in result.decisions:
-            icon = _decision_icon(decision.decision.value, decision.profile in recommendation_profiles)
-            if icon == "🔴":
-                continue
-            label = _profile_label(decision.profile.value)
-            decision_lines.append(f"{icon} {label}: {_decision_label(decision.decision.value)}")
-        if decision_lines:
-            visible_results.append((symbol, decision_lines))
-            visible_decision_count += len(decision_lines)
-
-    lines = [
-        "📊 ĐÁNH GIÁ PAPER THEO YÊU CẦU",
-        f"📦 {len(results)} mã được đánh giá | {visible_decision_count} tín hiệu hiển thị",
-    ]
-    for symbol, decision_lines in visible_results:
-        lines.append(f"\n📈 {symbol}")
-        lines.extend(decision_lines)
-    if recommendations:
-        lines.append("\n🟢 PAPER TRADE ĐỀ XUẤT")
-        for recommendation in recommendations:
-            candidate = recommendation.candidate
-            lines.extend(
-                [
-                    f"• {_profile_label(recommendation.profile.value)}: {candidate.side.value}",
-                    f"  Entry {candidate.entry_estimate} | SL {candidate.stop_price} | TP {candidate.target_price}",
-                    f"  Trạng thái: {recommendation.state.value}",
-                ]
-            )
-    else:
-        lines.append("\n📭 Không có mã 🟢 hoặc 🟡 trong chu kỳ này.")
-    lines.append("\nChú thích: 🟢 Có thể trade PAPER | 🟡 Chờ điều kiện | 🔴 Không trade")
-    return "\n".join(lines)
+    """Format every on-demand evaluation with symbol-level explanations."""
+    return format_evaluation_summary(build_evaluation_summary(results, recommendations, snapshot_symbols))
 
 
 def _decision_icon(decision: str, has_recommendation: bool) -> str:

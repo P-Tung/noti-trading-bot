@@ -17,13 +17,21 @@ from trade_brain.claude import ClaudeSelector
 from trade_brain.collector import PublicSnapshotCollector
 from trade_brain.configuration import TradeBrainConfig
 from trade_brain.decision_worker import DecisionWorkerConfig, _configured_mode, run_decision_once
+from trade_brain.evaluation_reporting import build_evaluation_summary
+from trade_brain.evaluation_status import EvaluationProgress
 from trade_brain.contracts import ClaudeDecision, PaperMode, Profile, QualityStatus, StrictModel, TradeCandidate
 from trade_brain.orchestration import CandidateRiskInput, DecisionSelector, run_decision_cycle
 from trade_brain.paper import MarketQuote, PaperAccount, PaperRecommendation, PaperState, PaperTradingEngine, PaperTradingError
 from trade_brain.market_data import Bar
 from trade_brain.paper_service import create_paper_recommendations
 from trade_brain.reporting import CohortScope, CohortTracker, PaperReport, ReportRecord
-from trade_brain.telegram import TelegramError, TelegramNotifier, format_recommendation, format_report
+from trade_brain.telegram import (
+    TelegramError,
+    TelegramNotifier,
+    configured_chat_ids,
+    format_recommendation,
+    format_report,
+)
 from trade_brain.risk import CandidateStatistics, RiskContext
 from trade_brain.storage import InMemorySnapshotStore, SnapshotStore
 from trade_brain.supabase_store import SupabaseSnapshotStore
@@ -129,6 +137,7 @@ def create_app(
         runtime_config = TradeBrainConfig.defaults()
     active_paper_engine = paper_engine or PaperTradingEngine()
     notified_report_keys: set[tuple[str, int, str]] = set()
+    evaluation_progress = EvaluationProgress(snapshot_store)
     evaluation_lock = asyncio.Lock()
     load_paper_recommendations = getattr(snapshot_store, "load_paper_recommendations", None)
     if callable(load_paper_recommendations):
@@ -174,10 +183,17 @@ def create_app(
         scans = loader(limit) if callable(loader) else []
         return {"scans": scans}
 
+    @service.get("/v1/evaluation/status")
+    async def evaluation_status() -> dict[str, object]:
+        """Return shared evaluation queue progress and the latest result."""
+        return {"evaluation": evaluation_progress.current()}
+
     @service.put("/v1/config")
     async def update_config(request: TradeBrainConfig) -> dict[str, object]:
         """Persist validated research settings for future PAPER cycles."""
         nonlocal runtime_config
+        if request.config_version == "config-v1":
+            request = request.model_copy(update={"config_version": "config-v2"})
         saver = getattr(snapshot_store, "save_config", None)
         if not callable(saver):
             raise HTTPException(status_code=503, detail="Config store chưa được cấu hình.")
@@ -225,8 +241,12 @@ def create_app(
             active_notifier = notifier
             owns_notifier = False
             try:
-                if active_notifier is None and os.environ.get("TELEGRAM_BOT_TOKEN") and os.environ.get("TELEGRAM_CHAT_ID"):
-                    active_notifier = TelegramNotifier.from_environment()
+                if active_notifier is None and os.environ.get("TELEGRAM_BOT_TOKEN"):
+                    chat_ids = set(configured_chat_ids())
+                    load_chat_ids = getattr(snapshot_store, "list_telegram_chat_ids", None)
+                    if callable(load_chat_ids):
+                        chat_ids.update(load_chat_ids())
+                    active_notifier = TelegramNotifier(os.environ["TELEGRAM_BOT_TOKEN"], tuple(chat_ids))
                     owns_notifier = True
 
                 symbols = manual_universe(runtime_config.symbols)
@@ -259,6 +279,19 @@ def create_app(
                             "universe": universe_summary,
                         }
 
+                run_id = evaluation_progress.start(tuple(symbols))
+                if active_notifier is not None:
+                    await active_notifier.send(
+                        f"🔄 BẮT ĐẦU QUÉT PAPER\n📦 Queue: {len(symbols)} mã\n🧠 Trade Brain V2 đang phân tích..."
+                    )
+                recommendation_ids_before = {
+                    recommendation.recommendation_id
+                    for recommendation in active_paper_engine.list_recommendations()
+                }
+
+                async def on_progress(index: int, total: int, symbol: str, completed: bool) -> None:
+                    evaluation_progress.mark_symbol(run_id, index, symbol, completed)
+
                 if active_selector is None:
                     try:
                         active_selector = ClaudeSelector.from_environment()
@@ -285,12 +318,25 @@ def create_app(
                     brain_config=runtime_config,
                     notifier=active_notifier,
                     notified_report_keys=notified_report_keys,
+                    on_progress=on_progress,
                 )
                 decision_count = sum(len(result.decisions) for result in results)
                 recommendation_count = sum(
                     recommendation.recommendation_id not in recommendation_ids_before
                     for recommendation in active_paper_engine.list_recommendations()
                 )
+                snapshot_symbols = {
+                    result.snapshot_id: snapshot.symbol
+                    for result in results
+                    if (snapshot := snapshot_store.get_snapshot(result.snapshot_id)) is not None
+                }
+                new_recommendations = [
+                    recommendation
+                    for recommendation in active_paper_engine.list_recommendations()
+                    if recommendation.recommendation_id not in recommendation_ids_before
+                ]
+                result_summary = build_evaluation_summary(results, new_recommendations, snapshot_symbols)
+                evaluation_progress.finish(run_id, result_summary)
                 return {
                     "status": "ok",
                     "message": f"Đã đánh giá {len(results)} mã, tạo {decision_count} quyết định PAPER.",
@@ -298,7 +344,12 @@ def create_app(
                     "decision_count": decision_count,
                     "recommendation_count": recommendation_count,
                     "universe": universe_summary,
+                    "result_summary": result_summary,
                 }
+            except Exception as error:
+                if "run_id" in locals():
+                    evaluation_progress.fail(run_id, str(error))
+                raise
             finally:
                 if owns_selector and isinstance(active_selector, ClaudeSelector):
                     await active_selector.close()

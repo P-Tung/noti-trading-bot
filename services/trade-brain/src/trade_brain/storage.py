@@ -31,6 +31,12 @@ class SnapshotStore(Protocol):
     def list_universe_scans(self, limit: int = 20) -> list[dict[str, object]]:
         """Return recent universe scans with exclusion audit counts."""
 
+    def save_evaluation_status(self, status: dict[str, object]) -> None:
+        """Persist the active evaluation queue status."""
+
+    def get_evaluation_status(self) -> dict[str, object] | None:
+        """Return the latest evaluation queue status."""
+
 
 class DecisionHistoryStore(Protocol):
     """Optional persistence boundary for recent Claude decisions."""
@@ -49,6 +55,7 @@ class InMemorySnapshotStore:
         self._snapshots: dict[str, MarketSnapshot] = {}
         self._decision_history: list[dict[str, object]] = []
         self._universe_scans: list[dict[str, object]] = []
+        self._evaluation_status: dict[str, object] | None = None
         self._config: TradeBrainConfig | None = None
 
     def load_config(self) -> TradeBrainConfig | None:
@@ -86,6 +93,12 @@ class InMemorySnapshotStore:
         if not 1 <= limit <= 100:
             raise ValueError("limit must be between 1 and 100")
         return [dict(record) for record in self._universe_scans[:limit]]
+
+    def save_evaluation_status(self, status: dict[str, object]) -> None:
+        self._evaluation_status = dict(status)
+
+    def get_evaluation_status(self) -> dict[str, object] | None:
+        return dict(self._evaluation_status) if self._evaluation_status is not None else None
 
     def save_snapshot(self, snapshot: MarketSnapshot) -> None:
         if snapshot.snapshot_id in self._snapshots:

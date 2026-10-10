@@ -14,6 +14,8 @@ from trade_brain.collector import TIMEFRAMES, PublicSnapshotCollector
 from trade_brain.configuration import TradeBrainConfig, runtime_policies
 from trade_brain.contracts import MarketSnapshot, PaperMode, Profile, TradeCandidate
 from trade_brain.discord import BroadcastNotifier, DiscordCommandPoller, DiscordNotifier
+from trade_brain.evaluation_reporting import build_evaluation_summary
+from trade_brain.evaluation_status import EvaluationProgress
 from trade_brain.orchestration import CandidateRiskInput, DecisionCycleResult, DecisionSelector, run_decision_cycle
 from trade_brain.paper import PaperRecommendation, PaperTradingEngine
 from trade_brain.paper_service import PaperDecisionResult, create_paper_recommendations
@@ -66,6 +68,7 @@ async def run_decision_once(
     notified_report_keys: set[tuple[str, int, str]] | None = None,
     brain_config: TradeBrainConfig | None = None,
     on_recommendations: Callable[[str, Sequence[PaperRecommendation]], Awaitable[None]] | None = None,
+    on_progress: Callable[[int, int, str, bool], Awaitable[None]] | None = None,
 ) -> list[DecisionCycleResult]:
     """Collect, detect, risk-gate, select, and paper-record one cycle per symbol."""
     active_brain_config = brain_config or TradeBrainConfig.defaults()
@@ -74,7 +77,10 @@ async def run_decision_once(
         ensure_experiment(experiment_id)
     collector = PublicSnapshotCollector(client, store)
     results: list[DecisionCycleResult] = []
-    for symbol in symbols:
+    total_symbols = len(symbols)
+    for index, symbol in enumerate(symbols, start=1):
+        if on_progress is not None:
+            await on_progress(index, total_symbols, symbol, False)
         try:
             collected = await collector.collect_timeframes(
                 experiment_id,
@@ -85,6 +91,8 @@ async def run_decision_once(
             )
         except (BinanceClientError, httpx.HTTPError, ValueError) as error:
             LOGGER.warning("Skipping decision cycle for %s: %s", symbol, error)
+            if on_progress is not None:
+                await on_progress(index, total_symbols, symbol, True)
             continue
         snapshot = collected.snapshot
         bars_1h = collected.bars_by_timeframe["1h"]
@@ -130,6 +138,8 @@ async def run_decision_once(
             notified_report_keys if notified_report_keys is not None else set(),
         )
         results.append(result)
+        if on_progress is not None:
+            await on_progress(index, total_symbols, symbol, True)
     return results
 
 
@@ -144,6 +154,7 @@ async def run_forever() -> None:
     notifier_sinks = [sink for sink in (telegram_notifier, discord_notifier) if sink is not None]
     notifier = BroadcastNotifier(notifier_sinks) if notifier_sinks else None
     notified_report_keys: set[tuple[str, int, str]] = set()
+    progress = EvaluationProgress(store)
     experiment_id = os.environ.get("TRADE_V1_EXPERIMENT_ID", "trade-v1-local")
     cycle_lock = asyncio.Lock()
     initialisation_task: asyncio.Task[None] | None = None
@@ -196,23 +207,56 @@ async def run_forever() -> None:
                 if not symbols:
                     LOGGER.warning("V2 universe is empty, skipping AI and paper evaluation")
                     return []
-            return await run_decision_once(
-                store,
-                experiment_id,
-                symbols,
-                api_selector,
-                client,
-                paper_engine,
-                config=DecisionWorkerConfig(
-                    equity_usdt=brain_config.initial_equity_usdt,
-                    available_margin_usdt=brain_config.initial_equity_usdt,
-                    paper_mode=brain_config.paper_mode,
-                ),
-                notifier=notifier if notify else None,
-                notified_report_keys=notified_report_keys,
-                brain_config=brain_config,
-                on_recommendations=broadcast_immediate_trade if not notify else None,
-            )
+            run_id = progress.start(tuple(symbols))
+            recommendation_ids_before = {
+                recommendation.recommendation_id
+                for recommendation in paper_engine.list_recommendations()
+            }
+            if telegram_notifier is not None:
+                await telegram_notifier.send(
+                    f"🔄 BẮT ĐẦU QUÉT PAPER\n📦 Queue: {len(symbols)} mã\n🧠 Trade Brain V2 đang phân tích..."
+                )
+
+            async def on_progress(index: int, total: int, symbol: str, completed: bool) -> None:
+                progress.mark_symbol(run_id, index, symbol, completed)
+
+            try:
+                results = await run_decision_once(
+                    store,
+                    experiment_id,
+                    symbols,
+                    api_selector,
+                    client,
+                    paper_engine,
+                    config=DecisionWorkerConfig(
+                        equity_usdt=brain_config.initial_equity_usdt,
+                        available_margin_usdt=brain_config.initial_equity_usdt,
+                        paper_mode=brain_config.paper_mode,
+                    ),
+                    notifier=notifier if notify else None,
+                    notified_report_keys=notified_report_keys,
+                    brain_config=brain_config,
+                    on_recommendations=broadcast_immediate_trade if not notify else None,
+                    on_progress=on_progress,
+                )
+                snapshot_symbols = {
+                    result.snapshot_id: snapshot.symbol
+                    for result in results
+                    if (snapshot := store.get_snapshot(result.snapshot_id)) is not None
+                }
+                new_recommendations = [
+                    recommendation
+                    for recommendation in paper_engine.list_recommendations()
+                    if recommendation.recommendation_id not in recommendation_ids_before
+                ]
+                progress.finish(
+                    run_id,
+                    build_evaluation_summary(results, new_recommendations, snapshot_symbols),
+                )
+                return results
+            except Exception as error:
+                progress.fail(run_id, str(error))
+                raise
 
     async def evaluate_on_demand() -> str:
         before_ids = {

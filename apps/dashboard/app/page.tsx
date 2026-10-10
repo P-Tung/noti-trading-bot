@@ -110,7 +110,48 @@ type EvaluationResponse = {
   evaluated_snapshot_ids: string[];
   decision_count: number;
   recommendation_count: number;
+  result_summary?: EvaluationSummaryItem[];
 };
+
+type EvaluationSummaryDecision = {
+  profile: Profile;
+  decision: string;
+  icon: string;
+  summary_vi: string;
+  reasons: string[];
+  candidate?: {
+    strategy?: string;
+    entry_stage?: string;
+    side?: string;
+    entry_estimate?: number;
+    stop_price?: number;
+    target_price?: number;
+  } | null;
+};
+
+type EvaluationSummaryItem = {
+  symbol: string;
+  snapshot_id: string;
+  candidate_count: number;
+  eligible_count: number;
+  decisions: EvaluationSummaryDecision[];
+};
+
+type EvaluationStatus = {
+  run_id: string | null;
+  status: "IDLE" | "RUNNING" | "COMPLETED" | "FAILED";
+  started_at: string | null;
+  finished_at: string | null;
+  total_count: number;
+  completed_count: number;
+  current_index: number;
+  current_symbol: string | null;
+  symbols: string[];
+  result_summary: EvaluationSummaryItem[];
+  error: string | null;
+};
+
+type EvaluationStatusResponse = { evaluation: EvaluationStatus };
 
 function isSnapshotResponse(value: unknown): value is SnapshotResponse {
   if (!value || typeof value !== "object" || !("snapshots" in value)) return false;
@@ -148,6 +189,12 @@ function isReportResponse(value: unknown): value is ReportResponse {
   return Array.isArray(value.reports);
 }
 
+function isEvaluationStatusResponse(value: unknown): value is EvaluationStatusResponse {
+  if (!value || typeof value !== "object" || !("evaluation" in value)) return false;
+  const evaluation = value.evaluation;
+  return Boolean(evaluation && typeof evaluation === "object" && "status" in evaluation);
+}
+
 function formatSnapshotTime(value: string): string {
   return new Intl.DateTimeFormat("vi-VN", {
     dateStyle: "short",
@@ -182,6 +229,25 @@ function formatRatio(value: string | null | undefined, emptyLabel: string): stri
   return Number.isFinite(numericValue) ? `${(numericValue * 100).toFixed(1)}%` : emptyLabel;
 }
 
+function PaginationControls({
+  page,
+  pageCount,
+  onChange,
+}: {
+  page: number;
+  pageCount: number;
+  onChange: (page: number) => void;
+}) {
+  if (pageCount <= 1) return null;
+  return (
+    <div className="pagination" aria-label="Phân trang">
+      <button type="button" className="symbol-action" disabled={page === 1} onClick={() => onChange(page - 1)}>Trước</button>
+      <span>Trang {page}/{pageCount}</span>
+      <button type="button" className="symbol-action" disabled={page === pageCount} onClick={() => onChange(page + 1)}>Sau</button>
+    </div>
+  );
+}
+
 export default function DashboardPage() {
   const [selectedProfile, setSelectedProfile] = useState<Profile>("BALANCED");
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
@@ -190,6 +256,12 @@ export default function DashboardPage() {
   const [reports, setReports] = useState<Array<PaperReport | null>>([]);
   const [completedTradeReports, setCompletedTradeReports] = useState<Array<PaperReport | null>>([]);
   const [globalSetupReport, setGlobalSetupReport] = useState<GlobalReport | null>(null);
+  const [evaluationStatus, setEvaluationStatus] = useState<EvaluationStatus | null>(null);
+  const [lastEvaluation, setLastEvaluation] = useState<EvaluationSummaryItem[]>([]);
+  const [decisionPage, setDecisionPage] = useState(1);
+  const [snapshotPage, setSnapshotPage] = useState(1);
+  const [journalPage, setJournalPage] = useState(1);
+  const [detailPage, setDetailPage] = useState(1);
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [decisions, setDecisions] = useState<DecisionRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -202,13 +274,14 @@ export default function DashboardPage() {
     setIsLoading(true);
     setConnectionError(null);
     try {
-      const [healthResponse, decisionResponse, snapshotResponse, paperResponse, reportResponse, accountResponse] = await Promise.all([
+      const [healthResponse, decisionResponse, snapshotResponse, paperResponse, reportResponse, accountResponse, evaluationStatusResponse] = await Promise.all([
         fetch("/api/health", { cache: "no-store" }),
-        fetch("/api/decisions/recent?limit=20", { cache: "no-store" }),
-        fetch("/api/snapshots?limit=20", { cache: "no-store" }),
+        fetch("/api/decisions/recent?limit=100", { cache: "no-store" }),
+        fetch("/api/snapshots?limit=100", { cache: "no-store" }),
         fetch("/api/paper/recommendations", { cache: "no-store" }),
         fetch("/api/reports", { cache: "no-store" }),
         fetch("/api/paper/accounts", { cache: "no-store" }),
+        fetch("/api/evaluation/status", { cache: "no-store" }),
       ]);
       const healthPayload: unknown = await healthResponse.json();
       const decisionPayload: unknown = await decisionResponse.json();
@@ -216,6 +289,7 @@ export default function DashboardPage() {
       const paperPayload: unknown = await paperResponse.json();
       const reportPayload: unknown = await reportResponse.json();
       const accountPayload: unknown = await accountResponse.json();
+      const evaluationStatusPayload: unknown = await evaluationStatusResponse.json();
       if (!healthResponse.ok || !isHealthResponse(healthPayload)) {
         throw new Error("Trade Brain chưa phản hồi trạng thái PAPER hợp lệ.");
       }
@@ -242,6 +316,10 @@ export default function DashboardPage() {
       setCompletedTradeReports(reportPayload.completed_trade_reports);
       setGlobalSetupReport(reportPayload.global_setup_report);
       setAccounts(accountPayload.accounts);
+      if (evaluationStatusResponse.ok && isEvaluationStatusResponse(evaluationStatusPayload)) {
+        setEvaluationStatus(evaluationStatusPayload.evaluation);
+        setLastEvaluation(evaluationStatusPayload.evaluation.result_summary ?? []);
+      }
     } catch (error) {
       setConnectionError(error instanceof Error ? error.message : "Không thể tải dữ liệu.");
     } finally {
@@ -294,6 +372,7 @@ export default function DashboardPage() {
       }
       const result = payload as EvaluationResponse;
       setEvaluationMessage(result.message);
+      if (result.result_summary) setLastEvaluation(result.result_summary);
       await loadSnapshots();
     } catch (error) {
       setEvaluationMessage(error instanceof Error ? error.message : "Không thể chạy đánh giá.");
@@ -305,6 +384,42 @@ export default function DashboardPage() {
   useEffect(() => {
     void loadSnapshots();
   }, [loadSnapshots]);
+
+  useEffect(() => {
+    const refreshTimer = window.setInterval(() => {
+      void fetch("/api/evaluation/status", { cache: "no-store" })
+        .then((response) => response.json() as Promise<unknown>)
+        .then((payload) => {
+          if (isEvaluationStatusResponse(payload)) {
+            setEvaluationStatus(payload.evaluation);
+            setLastEvaluation(payload.evaluation.result_summary ?? []);
+          }
+        })
+        .catch(() => undefined);
+    }, 2_000);
+    return () => window.clearInterval(refreshTimer);
+  }, []);
+
+  const isQueueRunning = evaluationStatus?.status === "RUNNING";
+  const selectedDecisionIds = new Set(
+    decisions
+      .filter((decision) => decision.profile === selectedProfile)
+      .map((decision) => decision.snapshot_id),
+  );
+  const filteredSnapshots = snapshots.filter((snapshot) => selectedDecisionIds.has(snapshot.snapshot_id));
+  const filteredRecommendations = recommendations.filter(
+    (recommendation) => recommendation.profile === selectedProfile,
+  );
+  const pageSize = 10;
+  const decisionRows = decisions.filter((decision) => decision.profile === selectedProfile);
+  const decisionPageCount = Math.max(1, Math.ceil(decisionRows.length / pageSize));
+  const snapshotPageCount = Math.max(1, Math.ceil(filteredSnapshots.length / pageSize));
+  const journalPageCount = Math.max(1, Math.ceil(filteredRecommendations.length / pageSize));
+  const detailPageCount = Math.max(1, Math.ceil(lastEvaluation.length / pageSize));
+  const decisionPageRows = decisionRows.slice((decisionPage - 1) * pageSize, decisionPage * pageSize);
+  const snapshotPageRows = filteredSnapshots.slice((snapshotPage - 1) * pageSize, snapshotPage * pageSize);
+  const journalPageRows = filteredRecommendations.slice((journalPage - 1) * pageSize, journalPage * pageSize);
+  const detailPageRows = lastEvaluation.slice((detailPage - 1) * pageSize, detailPage * pageSize);
 
   useEffect(() => {
     const refreshTimer = window.setInterval(() => {
@@ -335,6 +450,13 @@ export default function DashboardPage() {
           >
             {isEvaluating ? "Đang đánh giá..." : "Đánh giá ngay"}
           </button>
+          <span className={`queue-status ${isQueueRunning ? "is-running" : ""}`} role="status" aria-live="polite">
+            {isQueueRunning
+              ? `🔄 Đang quét ${evaluationStatus?.current_index ?? 0}/${evaluationStatus?.total_count ?? 0}: ${evaluationStatus?.current_symbol ?? "đang chuẩn bị"}`
+              : evaluationStatus?.status === "FAILED"
+                ? `Queue lỗi: ${evaluationStatus.error ?? "không rõ nguyên nhân"}`
+                : "Queue sẵn sàng"}
+          </span>
           <button className="ghost-button" type="button" onClick={() => void loadSnapshots()} disabled={isLoading}>
             {isLoading ? "Đang tải..." : "Đồng bộ dữ liệu"}
           </button>
@@ -378,7 +500,13 @@ export default function DashboardPage() {
               type="button"
               role="tab"
               aria-selected={profile.id === selectedProfile}
-              onClick={() => setSelectedProfile(profile.id)}
+              onClick={() => {
+                setSelectedProfile(profile.id);
+                setDecisionPage(1);
+                setSnapshotPage(1);
+                setJournalPage(1);
+                setDetailPage(1);
+              }}
             >
               <span>{profile.label}</span>
               <small>{profile.description}</small>
@@ -393,11 +521,11 @@ export default function DashboardPage() {
             <p className="eyebrow">Claude decision audit</p>
             <h2 id="decision-heading">Quyết định gần nhất của ba tầng</h2>
           </div>
-          <span className="selected-label">{decisions.length} quyết định</span>
+          <span className="selected-label">{decisionRows.length} quyết định · {activeProfile.label}</span>
         </div>
-        {decisions.length > 0 ? (
+        {decisionRows.length > 0 ? (
           <div className="snapshot-list">
-            {decisions.slice(0, 6).map((decision) => (
+            {decisionPageRows.map((decision) => (
               <article className="snapshot-row" key={decision.decision_id}>
                 <strong>{profiles.find((profile) => profile.id === decision.profile)?.label ?? decision.profile}</strong>
                 <span>{decision.decision} · {decision.validation_status}</span>
@@ -421,6 +549,7 @@ export default function DashboardPage() {
                 )}
               </article>
             ))}
+            <PaginationControls page={decisionPage} pageCount={decisionPageCount} onChange={setDecisionPage} />
           </div>
         ) : (
           <p className="panel-note">Chưa có decision audit. Hãy chạy decision worker sau khi có snapshot.</p>
@@ -461,11 +590,11 @@ export default function DashboardPage() {
             <p className="eyebrow">Market snapshots</p>
             <h2 id="snapshot-heading">Dữ liệu gần nhất</h2>
           </div>
-          <span className="selected-label">{snapshots.length} snapshot</span>
+          <span className="selected-label">{filteredSnapshots.length} snapshot · {activeProfile.label}</span>
         </div>
-        {snapshots.length > 0 ? (
+        {filteredSnapshots.length > 0 ? (
           <div className="snapshot-list">
-            {snapshots.slice(0, 5).map((snapshot) => (
+            {snapshotPageRows.map((snapshot) => (
               <article className="snapshot-row" key={snapshot.snapshot_id}>
                 <strong>{snapshot.symbol}</strong>
                 <span>{snapshot.data_mode} · {snapshotQualityLabel(snapshot)}</span>
@@ -473,10 +602,11 @@ export default function DashboardPage() {
                 <time dateTime={snapshot.decision_time}>{formatSnapshotTime(snapshot.decision_time)}</time>
               </article>
             ))}
+            <PaginationControls page={snapshotPage} pageCount={snapshotPageCount} onChange={setSnapshotPage} />
           </div>
         ) : (
           <p className="panel-note">
-            {isLoading ? "Đang tải snapshot..." : "Chưa có snapshot. Hãy khởi động Trade Brain collector."}
+            {isLoading ? "Đang tải snapshot..." : "Chưa có snapshot cho tầng đang xem."}
           </p>
         )}
       </section>
@@ -487,11 +617,11 @@ export default function DashboardPage() {
             <p className="eyebrow">Paper journal</p>
             <h2 id="journal-heading">Recommendation gần nhất</h2>
           </div>
-          <span className="selected-label">{activeRecommendations.length} {activeProfile.label}</span>
+          <span className="selected-label">{filteredRecommendations.length} {activeProfile.label}</span>
         </div>
-        {activeRecommendations.length > 0 ? (
+        {filteredRecommendations.length > 0 ? (
           <div className="snapshot-list">
-            {activeRecommendations.slice(0, 5).map((recommendation) => (
+            {journalPageRows.map((recommendation) => (
               <article className="snapshot-row" key={recommendation.recommendation_id}>
                 <strong>{recommendation.symbol ?? "Mã chưa xác định"} · {recommendation.side}</strong>
                 <span>
@@ -504,9 +634,42 @@ export default function DashboardPage() {
                 <time dateTime={recommendation.emitted_at}>{formatSnapshotTime(recommendation.emitted_at)}</time>
               </article>
             ))}
+            <PaginationControls page={journalPage} pageCount={journalPageCount} onChange={setJournalPage} />
           </div>
         ) : (
           <p className="panel-note">Chưa có paper recommendation.</p>
+        )}
+      </section>
+
+      <section className="snapshot-panel" aria-labelledby="queue-result-heading">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">Queue result audit</p>
+            <h2 id="queue-result-heading">Phân tích chi tiết từng mã</h2>
+          </div>
+          <span className="selected-label">{lastEvaluation.length} mã · {activeProfile.label}</span>
+        </div>
+        {lastEvaluation.length > 0 ? (
+          <div className="evaluation-detail-list">
+            {detailPageRows.map((item) => (
+              <article className="evaluation-detail" key={item.snapshot_id}>
+                <div className="evaluation-detail-heading">
+                  <strong>{item.symbol}</strong>
+                  <span>{item.eligible_count}/{item.candidate_count} ứng viên đạt cổng máy</span>
+                </div>
+                {item.decisions.filter((decision) => decision.profile === selectedProfile).map((decision) => (
+                  <div className="evaluation-decision" key={`${item.snapshot_id}-${decision.profile}`}>
+                    <strong>{decision.icon} {decision.decision}</strong>
+                    <span>{decision.summary_vi}</span>
+                    <small>{decision.reasons.join(" · ")}</small>
+                  </div>
+                ))}
+              </article>
+            ))}
+            <PaginationControls page={detailPage} pageCount={detailPageCount} onChange={setDetailPage} />
+          </div>
+        ) : (
+          <p className="panel-note">Chưa có kết quả queue gần nhất.</p>
         )}
       </section>
 

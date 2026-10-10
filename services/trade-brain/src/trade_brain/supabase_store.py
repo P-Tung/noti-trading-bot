@@ -91,7 +91,10 @@ class SupabaseSnapshotStore:
         rows = getattr(response, "data", None) or []
         if not rows:
             return None
-        return config_from_payload(rows[0].get("payload"))
+        config = config_from_payload(rows[0].get("payload"))
+        if rows[0].get("payload", {}).get("config_version") == "config-v1":
+            self.save_config(config)
+        return config
 
     def save_config(self, config: TradeBrainConfig) -> None:
         """Upsert the active configuration without exposing it to clients."""
@@ -141,6 +144,42 @@ class SupabaseSnapshotStore:
             raise RuntimeError(f"Supabase universe scan list failed: {response.error}")
         rows = getattr(response, "data", None)
         return [dict(row) for row in rows] if isinstance(rows, list) else []
+
+    def save_evaluation_status(self, status: dict[str, object]) -> None:
+        """Persist shared queue progress for the dashboard and Telegram worker."""
+        response = self._client.table("evaluation_queue_status").upsert(
+            {
+                "status_id": "active",
+                "run_id": status.get("run_id"),
+                "status": status.get("status", "IDLE"),
+                "started_at": status.get("started_at"),
+                "finished_at": status.get("finished_at"),
+                "total_count": status.get("total_count", 0),
+                "completed_count": status.get("completed_count", 0),
+                "current_index": status.get("current_index", 0),
+                "current_symbol": status.get("current_symbol"),
+                "symbols": status.get("symbols", []),
+                "result_summary": status.get("result_summary", []),
+                "error": status.get("error"),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        ).execute()
+        if getattr(response, "error", None):
+            raise RuntimeError(f"Supabase evaluation status save failed: {response.error}")
+
+    def get_evaluation_status(self) -> dict[str, object] | None:
+        """Read the latest shared queue state."""
+        response = (
+            self._client.table("evaluation_queue_status")
+            .select("*")
+            .eq("status_id", "active")
+            .limit(1)
+            .execute()
+        )
+        if getattr(response, "error", None):
+            raise RuntimeError(f"Supabase evaluation status read failed: {response.error}")
+        rows = getattr(response, "data", None) or []
+        return dict(rows[0]) if rows and isinstance(rows[0], dict) else None
 
     def list_telegram_chat_ids(self) -> tuple[str, ...]:
         """Load all Telegram chats that opted in with /start."""

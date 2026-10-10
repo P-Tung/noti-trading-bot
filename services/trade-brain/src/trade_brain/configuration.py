@@ -114,7 +114,10 @@ def config_from_payload(payload: object) -> TradeBrainConfig:
         raise ValueError("Trade Brain config payload must be an object")
     legacy_payload = dict(payload)
     legacy_payload.pop("automatic_evaluation_enabled", None)
-    return TradeBrainConfig.model_validate(legacy_payload)
+    config = TradeBrainConfig.model_validate(legacy_payload)
+    if config.config_version == "config-v1":
+        return config.model_copy(update={"config_version": "config-v2"})
+    return config
 
 
 def runtime_policies(config: TradeBrainConfig) -> dict[Profile, RiskPolicy]:
