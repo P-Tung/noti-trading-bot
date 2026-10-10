@@ -5,6 +5,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 type Profile = "PROACTIVE" | "BALANCED" | "CAUTIOUS";
 type PaperMode = "RESEARCH_PAPER" | "VERIFIED_PAPER";
 type UniverseMode = "BINANCE_VOLUME" | "MANUAL";
+type BrainVersion = "config-v1" | "config-v2" | "custom";
 
 type StrategyConfig = Record<string, number>;
 type BinanceSymbol = { symbol: string; baseAsset: string; quoteAsset: string; contractType: string };
@@ -80,6 +81,12 @@ const strategyFieldLabels: Record<string, string> = {
   sweep_buffer_atr: "Khoảng vượt biên cho phép",
 };
 
+const brainVersionOptions: Array<{ value: BrainVersion; label: string; description: string }> = [
+  { value: "config-v1", label: "Trade Brain V1", description: "Bộ cài đặt nền tảng cũ" },
+  { value: "config-v2", label: "Trade Brain V2", description: "Bộ cài đặt hiện tại" },
+  { value: "custom", label: "Cấu hình custom", description: "Bộ cài đặt do bạn tự điều chỉnh" },
+];
+
 function strategyFieldLabel(key: string): string {
   return strategyFieldLabels[key] ?? key.replaceAll("_", " ");
 }
@@ -120,6 +127,12 @@ function updateStrategy(
   return { ...config, [strategy]: { ...config[strategy], [key]: value } };
 }
 
+function getBrainVersion(configVersion: string): BrainVersion {
+  if (configVersion === "config-v1") return "config-v1";
+  if (configVersion === "config-v2") return "config-v2";
+  return "custom";
+}
+
 export default function TradeBrainConfigPage() {
   const [config, setConfig] = useState<TradeBrainConfig | null>(null);
   const [status, setStatus] = useState("Đang tải cấu hình...");
@@ -132,6 +145,7 @@ export default function TradeBrainConfigPage() {
   const [selectedSavedConfigId, setSelectedSavedConfigId] = useState("");
   const [savedConfigName, setSavedConfigName] = useState("V2 hiện tại");
   const [isLoadingSavedConfig, setIsLoadingSavedConfig] = useState(false);
+  const [selectedBrainVersion, setSelectedBrainVersion] = useState<BrainVersion>("config-v2");
 
   useEffect(() => {
     fetch("/api/config", { cache: "no-store" })
@@ -139,6 +153,7 @@ export default function TradeBrainConfigPage() {
         const payload = await response.json() as { config?: TradeBrainConfig; error?: string };
         if (!response.ok || !payload.config) throw new Error(payload.error ?? "Không thể tải cấu hình.");
         setConfig(payload.config);
+        setSelectedBrainVersion(getBrainVersion(payload.config.config_version));
         setStatus("Đã tải cài đặt hiện tại từ máy chủ");
       })
       .catch((error: unknown) => setStatus(error instanceof Error ? error.message : "Không thể tải cấu hình."));
@@ -187,6 +202,19 @@ export default function TradeBrainConfigPage() {
     setConfig({ ...config, symbols: [...config.symbols, ...availableSymbols.map((item) => item.symbol)] });
   }
 
+  function selectBrainVersion(version: BrainVersion) {
+    if (!config) return;
+    setSelectedBrainVersion(version);
+    setSelectedSavedConfigId("");
+    setConfig({ ...config, config_version: version === "custom" ? "custom" : version });
+    setSavedConfigName(version === "config-v1" ? "V1 nền tảng cũ" : version === "config-v2" ? "V2 hiện tại" : "Cấu hình custom mới");
+    setStatus(version === "custom" ? "Đã tạo bản nháp custom mới. Bạn có thể chỉnh sửa rồi lưu." : `Đã chọn ${version === "config-v1" ? "Trade Brain V1" : "Trade Brain V2"}. Bấm lưu để áp dụng.`);
+  }
+
+  function createCustomConfig() {
+    selectBrainVersion("custom");
+  }
+
   async function saveConfig(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!config) return;
@@ -228,6 +256,7 @@ export default function TradeBrainConfigPage() {
       const payload = await response.json() as { config?: TradeBrainConfig; error?: string; detail?: string };
       if (!response.ok || !payload.config) throw new Error(payload.error ?? payload.detail ?? "Không thể nạp bản cấu hình.");
       setConfig(payload.config);
+      setSelectedBrainVersion(getBrainVersion(payload.config.config_version));
       setStatus("Đã mở bản cài đặt. Bấm “Lưu và áp dụng cài đặt” để sử dụng.");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Không thể nạp bản cấu hình.");
@@ -254,7 +283,16 @@ export default function TradeBrainConfigPage() {
         <section className="config-section">
           <div className="section-heading"><div><p className="eyebrow">DỮ LIỆU ĐẦU VÀO</p><h2>Mã giao dịch và cách lấy dữ liệu</h2></div></div>
           <div className="config-grid config-grid-wide">
-            <label className="config-field"><span>Phiên bản cài đặt</span><input value={config.config_version} readOnly /></label>
+            <div className="config-field config-version-field">
+              <span>Chọn Trade Brain</span>
+              <div className="config-version-control">
+                <select value={selectedBrainVersion} onChange={(event) => selectBrainVersion(event.target.value as BrainVersion)} aria-label="Chọn phiên bản Trade Brain">
+                  {brainVersionOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+                <button className="ghost-button custom-config-button" type="button" onClick={createCustomConfig}>+ Tạo custom</button>
+              </div>
+              <small className="field-helper">{brainVersionOptions.find((option) => option.value === selectedBrainVersion)?.description}</small>
+            </div>
             <label className="config-field"><span>Mở cài đặt đã lưu</span><select value={selectedSavedConfigId} onChange={(event) => loadSavedConfig(event.target.value)} disabled={isLoadingSavedConfig}>
               <option value="">Chọn một bản cài đặt...</option>
               {savedConfigs.map((savedConfig) => <option key={savedConfig.config_id} value={savedConfig.config_id}>{savedConfig.name} · {savedConfig.config_version}</option>)}
