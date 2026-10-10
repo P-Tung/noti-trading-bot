@@ -32,6 +32,7 @@ type UniverseConfig = {
 type TradeBrainConfig = {
   config_version: string;
   paper_mode: PaperMode;
+  automatic_evaluation_enabled: boolean;
   symbols: string[];
   universe_mode: UniverseMode;
   universe: UniverseConfig;
@@ -165,6 +166,31 @@ export default function TradeBrainConfigPage() {
     }
   }
 
+  async function toggleAutomaticEvaluation() {
+    if (!config || isSaving) return;
+    const nextConfig = {
+      ...config,
+      automatic_evaluation_enabled: !config.automatic_evaluation_enabled,
+    };
+    setIsSaving(true);
+    setStatus(nextConfig.automatic_evaluation_enabled ? "Đang bật đánh giá tự động..." : "Đang tắt đánh giá tự động...");
+    try {
+      const response = await fetch("/api/config", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(nextConfig),
+      });
+      const payload = await response.json() as { config?: TradeBrainConfig; error?: string; detail?: string };
+      if (!response.ok || !payload.config) throw new Error(payload.error ?? payload.detail ?? "Không thể cập nhật chế độ tự động.");
+      setConfig(payload.config);
+      setStatus(payload.config.automatic_evaluation_enabled ? "Đã bật đánh giá tự động." : "Đã tắt đánh giá tự động.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Không thể cập nhật chế độ tự động.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
   if (!config) return <main className="shell"><a className="back-link" href="/">← Về dashboard</a><p className="config-status">{status}</p></main>;
 
   return (
@@ -215,6 +241,13 @@ export default function TradeBrainConfigPage() {
               <small className="field-helper">{config.universe_mode === "BINANCE_VOLUME" ? "V2 sẽ tự quét toàn bộ hợp đồng vĩnh cửu USDT TRADING, giữ mã có volume 24h từ 20 triệu USDT, không giới hạn 30 mã." : "Nguồn: Binance USDⓈ-M perpetual, chỉ lấy mã đang ở trạng thái TRADING."}</small>
             </div>
             <label className="config-field"><span>Chế độ PAPER</span><select value={config.paper_mode} onChange={(event) => setConfig({ ...config, paper_mode: event.target.value as PaperMode })}><option value="RESEARCH_PAPER">RESEARCH_PAPER</option><option value="VERIFIED_PAPER">VERIFIED_PAPER</option></select></label>
+            <div className="config-field">
+              <span>Đánh giá tự động</span>
+              <button className="ghost-button" type="button" onClick={() => void toggleAutomaticEvaluation()} disabled={isSaving} aria-pressed={config.automatic_evaluation_enabled}>
+                {config.automatic_evaluation_enabled ? "Đang bật" : "Đang tắt"}
+              </button>
+              <small className="field-helper">Mặc định tắt. Chỉ bật khi muốn worker tự quét theo chu kỳ và gọi Claude.</small>
+            </div>
             <NumberField label="Vốn mô phỏng, USDT" value={config.initial_equity_usdt} step="1" min="1" onChange={(value) => setConfig({ ...config, initial_equity_usdt: value })} />
           </div>
           <p className="config-warning">Không chỉnh `VERIFIED_PAPER` nếu chưa có đủ bằng chứng ngoài mẫu theo tài liệu.</p>

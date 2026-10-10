@@ -273,18 +273,17 @@ async def run_forever() -> None:
     async def run_periodic() -> None:
         while True:
             try:
-                await evaluate(notify=True)
+                brain_config = _load_brain_config(store)
+                if brain_config.automatic_evaluation_enabled:
+                    await evaluate(notify=True)
             except Exception:
                 LOGGER.exception("Periodic decision cycle failed; keeping command pollers alive")
             await asyncio.sleep(_configured_interval())
 
     try:
         tasks = [asyncio.create_task(poller.run_forever()) for poller in command_pollers]
-        if _auto_evaluation_enabled():
-            tasks.append(asyncio.create_task(run_periodic()))
-            LOGGER.info("Automatic Claude evaluation enabled")
-        else:
-            LOGGER.info("Automatic Claude evaluation disabled, manual commands only")
+        tasks.append(asyncio.create_task(run_periodic()))
+        LOGGER.info("Automatic evaluation follows the server-side dashboard configuration")
         await asyncio.gather(*tasks)
     finally:
         for poller in command_pollers:
@@ -541,14 +540,6 @@ def _configured_interval() -> int:
     if value < 60:
         raise RuntimeError("TRADE_COLLECTION_INTERVAL_SECONDS must be at least 60")
     return value
-
-
-def _auto_evaluation_enabled() -> bool:
-    """Keep cost-bearing Claude cycles manual unless explicitly enabled."""
-    raw_value = os.environ.get("TRADE_AUTO_EVALUATION_ENABLED", "false").strip().lower()
-    if raw_value not in {"true", "false"}:
-        raise RuntimeError("TRADE_AUTO_EVALUATION_ENABLED must be true or false")
-    return raw_value == "true"
 
 
 def _configured_mode() -> PaperMode:

@@ -47,6 +47,7 @@ class TradeBrainConfig(StrictModel):
 
     config_version: str = Field(min_length=1, max_length=80)
     paper_mode: PaperMode = PaperMode.RESEARCH_PAPER
+    automatic_evaluation_enabled: bool = False
     symbols: list[str] = Field(default_factory=list)
     universe_mode: UniverseMode = UniverseMode.BINANCE_VOLUME
     universe: UniverseConfig = UniverseConfig()
