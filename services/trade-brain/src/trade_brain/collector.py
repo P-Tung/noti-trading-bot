@@ -13,6 +13,8 @@ from trade_brain.snapshots import create_snapshot
 from trade_brain.storage import SnapshotStore
 
 TIMEFRAMES = ("1d", "4h", "1h", "15m")
+MINIMUM_1D_CANDLES = 250
+MINIMUM_1D_FETCH_DAYS = 300
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,16 +63,21 @@ class PublicSnapshotCollector:
             raise ValueError("history_days must be positive")
         bars_by_timeframe: dict[str, list[Bar]] = {}
         for timeframe in timeframes:
+            fetch_history_days = _fetch_history_days(timeframe, history_days)
             raw_klines = await _load_klines(
                 self._client,
                 symbol,
                 timeframe,
                 decision_time,
-                _history_bars(timeframe, history_days),
-                history_days,
+                _history_bars(timeframe, fetch_history_days),
+                fetch_history_days,
             )
             closed_klines = _closed_klines(raw_klines, decision_time)
-            minimum_bars = 250 if timeframe == "1d" and callable(getattr(self._client, "get_klines_history", None)) else 20
+            minimum_bars = (
+                MINIMUM_1D_CANDLES
+                if timeframe == "1d" and callable(getattr(self._client, "get_klines_history", None))
+                else 20
+            )
             if len(closed_klines) < minimum_bars:
                 raise ValueError(f"at least {minimum_bars} closed {timeframe} candles are required")
             bars_by_timeframe[timeframe] = [_to_bar(kline) for kline in closed_klines]
@@ -105,6 +112,13 @@ async def _load_klines(
 def _history_bars(timeframe: str, history_days: int) -> int:
     bars_per_day = {"1d": 1, "4h": 6, "1h": 24, "15m": 96}
     return max(300 if timeframe == "1d" else 1_500, history_days * bars_per_day[timeframe])
+
+
+def _fetch_history_days(timeframe: str, minimum_history_days: int) -> int:
+    """Fetch extra daily history when a strategy indicator needs warmup."""
+    if timeframe == "1d":
+        return max(minimum_history_days, MINIMUM_1D_FETCH_DAYS)
+    return minimum_history_days
 
 
 def _closed_klines(klines: list[BinanceKline], now: datetime) -> list[BinanceKline]:
