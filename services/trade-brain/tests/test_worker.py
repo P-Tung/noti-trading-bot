@@ -2,6 +2,7 @@ import pytest
 import asyncio
 
 from trade_brain import worker
+from trade_brain import decision_worker
 from trade_brain.storage import InMemorySnapshotStore
 
 
@@ -16,6 +17,19 @@ def test_configured_interval_rejects_fast_polling(monkeypatch: pytest.MonkeyPatc
 
     with pytest.raises(RuntimeError, match="at least 60"):
         worker.configured_interval_seconds()
+
+
+def test_auto_evaluation_is_manual_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("TRADE_AUTO_EVALUATION_ENABLED", raising=False)
+
+    assert decision_worker._auto_evaluation_enabled() is False
+
+
+def test_auto_evaluation_requires_explicit_boolean(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TRADE_AUTO_EVALUATION_ENABLED", "yes")
+
+    with pytest.raises(RuntimeError, match="must be true or false"):
+        decision_worker._auto_evaluation_enabled()
 
 
 def test_collect_once_skips_one_failed_symbol(monkeypatch: pytest.MonkeyPatch) -> None:
