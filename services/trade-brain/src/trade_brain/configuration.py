@@ -47,7 +47,6 @@ class TradeBrainConfig(StrictModel):
 
     config_version: str = Field(min_length=1, max_length=80)
     paper_mode: PaperMode = PaperMode.RESEARCH_PAPER
-    automatic_evaluation_enabled: bool = False
     symbols: list[str] = Field(default_factory=list)
     universe_mode: UniverseMode = UniverseMode.BINANCE_VOLUME
     universe: UniverseConfig = UniverseConfig()
@@ -113,7 +112,9 @@ def config_from_payload(payload: object) -> TradeBrainConfig:
     """Validate persisted settings and fall back only when no settings exist."""
     if not isinstance(payload, dict):
         raise ValueError("Trade Brain config payload must be an object")
-    return TradeBrainConfig.model_validate(payload)
+    legacy_payload = dict(payload)
+    legacy_payload.pop("automatic_evaluation_enabled", None)
+    return TradeBrainConfig.model_validate(legacy_payload)
 
 
 def runtime_policies(config: TradeBrainConfig) -> dict[Profile, RiskPolicy]:

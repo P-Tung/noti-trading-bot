@@ -165,7 +165,7 @@ PYTHONPATH=services/trade-brain/src services/trade-brain/.venv/bin/python -m tra
 ```
 
 The worker runs the full safe path: closed bars, T1/T2/R1 candidates, risk gates, Claude selection, paper recommendation, Supabase journal persistence, and optional Telegram notification.
-Automatic Claude evaluation is disabled by default during testing. Telegram and Discord commands remain available for on-demand evaluation. Enable it from the dashboard config page when scheduled evaluation is intended. Railway environment variables do not control this setting.
+Automatic Claude evaluation is not available in the current testing phase. Telegram and Discord commands remain available for on-demand evaluation only.
 The decision worker also skips a symbol when its collection cycle fails, so one market-data outage does not stop the other configured symbols.
 Each profile sizes from its restored current paper equity, so gains and losses change later paper risk budgets independently.
 The paper account endpoint also exposes mark-to-market equity for open positions; realized P&L remains separate.

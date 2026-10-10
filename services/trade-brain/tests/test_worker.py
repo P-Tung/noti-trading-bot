@@ -18,12 +18,6 @@ def test_configured_interval_rejects_fast_polling(monkeypatch: pytest.MonkeyPatc
         worker.configured_interval_seconds()
 
 
-def test_automatic_evaluation_is_disabled_in_default_config() -> None:
-    from trade_brain.configuration import TradeBrainConfig
-
-    assert TradeBrainConfig.defaults().automatic_evaluation_enabled is False
-
-
 def test_collect_once_skips_one_failed_symbol(monkeypatch: pytest.MonkeyPatch) -> None:
     class FakeClient:
         async def close(self) -> None:

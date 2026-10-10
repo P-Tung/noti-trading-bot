@@ -270,20 +270,11 @@ async def run_forever() -> None:
         asyncio.to_thread(_prepare_and_restore_paper_state, store, paper_engine, experiment_id)
     )
 
-    async def run_periodic() -> None:
-        while True:
-            try:
-                brain_config = _load_brain_config(store)
-                if brain_config.automatic_evaluation_enabled:
-                    await evaluate(notify=True)
-            except Exception:
-                LOGGER.exception("Periodic decision cycle failed; keeping command pollers alive")
-            await asyncio.sleep(_configured_interval())
-
     try:
         tasks = [asyncio.create_task(poller.run_forever()) for poller in command_pollers]
-        tasks.append(asyncio.create_task(run_periodic()))
-        LOGGER.info("Automatic evaluation follows the server-side dashboard configuration")
+        if not tasks:
+            await asyncio.Event().wait()
+            return
         await asyncio.gather(*tasks)
     finally:
         for poller in command_pollers:
@@ -533,13 +524,6 @@ def _configured_symbols() -> tuple[str, ...]:
     if not symbols:
         raise RuntimeError("TRADE_SYMBOLS must contain at least one symbol")
     return symbols
-
-
-def _configured_interval() -> int:
-    value = int(os.environ.get("TRADE_COLLECTION_INTERVAL_SECONDS", "900"))
-    if value < 60:
-        raise RuntimeError("TRADE_COLLECTION_INTERVAL_SECONDS must be at least 60")
-    return value
 
 
 def _configured_mode() -> PaperMode:
