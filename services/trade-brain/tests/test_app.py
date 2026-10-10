@@ -144,6 +144,24 @@ def test_config_accepts_more_than_thirty_symbols() -> None:
     assert config.symbols == configured_symbols
 
 
+def test_named_config_can_be_saved_listed_and_loaded() -> None:
+    store = InMemorySnapshotStore()
+    test_config = TradeBrainConfig.defaults().model_copy(update={"symbols": ["BTCUSDT", "ETHUSDT"]})
+    client = TestClient(create_app(store))
+
+    saved = client.post("/v1/config/saved", json={"name": "5 mã phổ biến", "config": test_config.model_dump(mode="json")})
+
+    assert saved.status_code == 200
+    saved_id = saved.json()["saved"]["config_id"]
+    listed = client.get("/v1/config/saved")
+    loaded = client.get(f"/v1/config/saved/{saved_id}")
+
+    assert listed.status_code == 200
+    assert listed.json()["configs"][0]["name"] == "5 mã phổ biến"
+    assert loaded.status_code == 200
+    assert loaded.json()["config"]["symbols"] == ["BTCUSDT", "ETHUSDT"]
+
+
 def test_universe_scan_endpoint_returns_audit_records() -> None:
     store = InMemorySnapshotStore()
     response = TestClient(create_app(store)).get("/v1/universe/scans?limit=10")

@@ -42,6 +42,14 @@ type TradeBrainConfig = {
   profiles: Record<Profile, ProfilePolicy>;
 };
 
+type SavedConfig = {
+  config_id: string;
+  name: string;
+  config_version: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
 const profileLabels: Record<Profile, string> = {
   PROACTIVE: "Chủ động",
   BALANCED: "Cân bằng",
@@ -98,6 +106,10 @@ export default function TradeBrainConfigPage() {
   const [symbolQuery, setSymbolQuery] = useState("");
   const [symbolsStatus, setSymbolsStatus] = useState("Đang tải danh sách Binance...");
   const [isSymbolDropdownOpen, setIsSymbolDropdownOpen] = useState(false);
+  const [savedConfigs, setSavedConfigs] = useState<SavedConfig[]>([]);
+  const [selectedSavedConfigId, setSelectedSavedConfigId] = useState("");
+  const [savedConfigName, setSavedConfigName] = useState("V2 hiện tại");
+  const [isLoadingSavedConfig, setIsLoadingSavedConfig] = useState(false);
 
   useEffect(() => {
     fetch("/api/config", { cache: "no-store" })
@@ -108,6 +120,16 @@ export default function TradeBrainConfigPage() {
         setStatus("Cấu hình hiện tại từ Trade Brain server");
       })
       .catch((error: unknown) => setStatus(error instanceof Error ? error.message : "Không thể tải cấu hình."));
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/config/saved", { cache: "no-store" })
+      .then(async (response) => {
+        const payload = await response.json() as { configs?: SavedConfig[]; error?: string };
+        if (!response.ok || !payload.configs) throw new Error(payload.error ?? "Không thể tải cấu hình đã lưu.");
+        setSavedConfigs(payload.configs);
+      })
+      .catch((error: unknown) => setStatus(error instanceof Error ? error.message : "Không thể tải cấu hình đã lưu."));
   }, []);
 
   useEffect(() => {
@@ -157,11 +179,38 @@ export default function TradeBrainConfigPage() {
       const payload = await response.json() as { config?: TradeBrainConfig; error?: string; detail?: string };
       if (!response.ok || !payload.config) throw new Error(payload.error ?? payload.detail ?? "Không thể lưu cấu hình.");
       setConfig(payload.config);
-      setStatus("Đã lưu. Chu kỳ PAPER tiếp theo sẽ dùng cấu hình mới.");
+      const savedResponse = await fetch("/api/config/saved", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: savedConfigName.trim() || "V2 hiện tại", config: payload.config }),
+      });
+      const savedPayload = await savedResponse.json() as { saved?: SavedConfig; error?: string; detail?: string };
+      if (!savedResponse.ok || !savedPayload.saved) throw new Error(savedPayload.error ?? savedPayload.detail ?? "Đã cập nhật active nhưng chưa lưu được bản đặt tên.");
+      setSavedConfigs((current) => [savedPayload.saved!, ...current.filter((item) => item.config_id !== savedPayload.saved!.config_id)]);
+      setSelectedSavedConfigId(savedPayload.saved.config_id);
+      setStatus("Đã lưu active và tạo bản cấu hình có tên.");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Không thể lưu cấu hình.");
     } finally {
       setIsSaving(false);
+    }
+  }
+
+  async function loadSavedConfig(configId: string) {
+    if (!configId) return;
+    setSelectedSavedConfigId(configId);
+    setIsLoadingSavedConfig(true);
+    setStatus("Đang nạp bản cấu hình đã lưu...");
+    try {
+      const response = await fetch(`/api/config/saved/${encodeURIComponent(configId)}`, { cache: "no-store" });
+      const payload = await response.json() as { config?: TradeBrainConfig; error?: string; detail?: string };
+      if (!response.ok || !payload.config) throw new Error(payload.error ?? payload.detail ?? "Không thể nạp bản cấu hình.");
+      setConfig(payload.config);
+      setStatus("Đã nạp vào form. Bấm Lưu cấu hình để áp dụng active.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Không thể nạp bản cấu hình.");
+    } finally {
+      setIsLoadingSavedConfig(false);
     }
   }
 
@@ -184,6 +233,11 @@ export default function TradeBrainConfigPage() {
           <div className="section-heading"><div><p className="eyebrow">Experiment</p><h2>Chế độ và dữ liệu</h2></div></div>
           <div className="config-grid config-grid-wide">
             <label className="config-field"><span>Phiên bản cấu hình V2</span><input value={config.config_version} readOnly /></label>
+            <label className="config-field"><span>Chọn cấu hình đã lưu</span><select value={selectedSavedConfigId} onChange={(event) => loadSavedConfig(event.target.value)} disabled={isLoadingSavedConfig}>
+              <option value="">Chọn một bản đã lưu...</option>
+              {savedConfigs.map((savedConfig) => <option key={savedConfig.config_id} value={savedConfig.config_id}>{savedConfig.name} · {savedConfig.config_version}</option>)}
+            </select></label>
+            <label className="config-field"><span>Tên bản cấu hình khi lưu</span><input value={savedConfigName} maxLength={80} onChange={(event) => setSavedConfigName(event.target.value)} placeholder="Ví dụ: 5 mã phổ biến" /></label>
             <label className="config-field"><span>Nguồn universe V2</span><select value={config.universe_mode} onChange={(event) => setConfig({ ...config, universe_mode: event.target.value as UniverseMode })}><option value="BINANCE_VOLUME">Binance tự lọc volume ≥ 20 triệu USDT</option><option value="MANUAL">Tự chọn mã thủ công</option></select></label>
             <NumberField label="Volume tối thiểu 24h, USDT" value={config.universe.min_quote_volume_24h_usdt} step="1000000" min="1" onChange={(value) => setConfig({ ...config, universe: { ...config.universe, min_quote_volume_24h_usdt: value } })} />
             <NumberField label="Refresh universe, giây" value={config.universe.refresh_seconds} step="60" min="60" onChange={(value) => setConfig({ ...config, universe: { ...config.universe, refresh_seconds: value } })} />

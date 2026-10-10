@@ -108,6 +108,57 @@ class SupabaseSnapshotStore:
         if getattr(response, "error", None):
             raise RuntimeError(f"Supabase config save failed: {response.error}")
 
+    def list_saved_configs(self, limit: int = 50) -> list[dict[str, object]]:
+        """List named configuration metadata through the server-only client."""
+        if not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        response = (
+            self._client.table("trade_brain_config_versions")
+            .select("config_id,name,config_version,created_at,updated_at")
+            .order("updated_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        if getattr(response, "error", None):
+            raise RuntimeError(f"Supabase config versions lookup failed: {response.error}")
+        rows = getattr(response, "data", None) or []
+        return [dict(row) for row in rows if isinstance(row, dict)]
+
+    def get_saved_config(self, config_id: str) -> TradeBrainConfig | None:
+        """Load one named configuration through the server-only client."""
+        response = (
+            self._client.table("trade_brain_config_versions")
+            .select("payload")
+            .eq("config_id", config_id)
+            .limit(1)
+            .execute()
+        )
+        if getattr(response, "error", None):
+            raise RuntimeError(f"Supabase saved config lookup failed: {response.error}")
+        rows = getattr(response, "data", None) or []
+        return config_from_payload(rows[0].get("payload")) if rows else None
+
+    def save_named_config(self, name: str, config: TradeBrainConfig) -> dict[str, object]:
+        """Save or replace a named configuration version."""
+        config_id = str(uuid5(NAMESPACE_URL, f"trade-brain-config:{name.strip().lower()}"))
+        response = self._client.table("trade_brain_config_versions").upsert(
+            {
+                "config_id": config_id,
+                "name": name.strip(),
+                "config_version": config.config_version,
+                "payload": config_to_payload(config),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+            on_conflict="config_id",
+        ).execute()
+        if getattr(response, "error", None):
+            raise RuntimeError(f"Supabase named config save failed: {response.error}")
+        return {
+            "config_id": config_id,
+            "name": name.strip(),
+            "config_version": config.config_version,
+        }
+
     def save_universe_scan(self, selection: UniverseSelection, config: TradeBrainConfig) -> None:
         """Persist one V2 universe refresh and its exclusion counts."""
         response = self._client.table("universe_scans").upsert(

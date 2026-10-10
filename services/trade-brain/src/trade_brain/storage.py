@@ -28,6 +28,15 @@ class SnapshotStore(Protocol):
     def save_config(self, config: TradeBrainConfig) -> None:
         """Persist the active server-side configuration."""
 
+    def list_saved_configs(self, limit: int = 50) -> list[dict[str, object]]:
+        """Return named configuration versions without exposing secrets."""
+
+    def get_saved_config(self, config_id: str) -> TradeBrainConfig | None:
+        """Return one named configuration version."""
+
+    def save_named_config(self, name: str, config: TradeBrainConfig) -> dict[str, object]:
+        """Persist a named configuration version and return its metadata."""
+
     def list_universe_scans(self, limit: int = 20) -> list[dict[str, object]]:
         """Return recent universe scans with exclusion audit counts."""
 
@@ -57,6 +66,7 @@ class InMemorySnapshotStore:
         self._universe_scans: list[dict[str, object]] = []
         self._evaluation_status: dict[str, object] | None = None
         self._config: TradeBrainConfig | None = None
+        self._saved_configs: dict[str, dict[str, object]] = {}
 
     def load_config(self) -> TradeBrainConfig | None:
         """Return a copy of the local runtime configuration."""
@@ -65,6 +75,34 @@ class InMemorySnapshotStore:
     def save_config(self, config: TradeBrainConfig) -> None:
         """Store a validated runtime configuration for local use."""
         self._config = config.model_copy(deep=True)
+
+    def list_saved_configs(self, limit: int = 50) -> list[dict[str, object]]:
+        """Return named local configuration versions in newest-first order."""
+        if not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        return [
+            {key: value for key, value in record.items() if key != "config"}
+            for record in list(self._saved_configs.values())[:limit]
+        ]
+
+    def get_saved_config(self, config_id: str) -> TradeBrainConfig | None:
+        """Return one named local configuration version."""
+        record = self._saved_configs.get(config_id)
+        config = record.get("config") if record else None
+        return config.model_copy(deep=True) if isinstance(config, TradeBrainConfig) else None
+
+    def save_named_config(self, name: str, config: TradeBrainConfig) -> dict[str, object]:
+        """Save or replace a named local configuration version."""
+        config_id = f"local-{name.strip().lower().replace(' ', '-') }"
+        record = {
+            "config_id": config_id,
+            "name": name.strip(),
+            "config_version": config.config_version,
+            "updated_at": "local",
+            "config": config.model_copy(deep=True),
+        }
+        self._saved_configs[config_id] = record
+        return {key: value for key, value in record.items() if key != "config"}
 
     def save_universe_scan(self, selection: UniverseSelection, config: TradeBrainConfig) -> None:
         """Keep the latest local universe audit without requiring a database."""

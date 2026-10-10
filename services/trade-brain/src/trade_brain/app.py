@@ -49,6 +49,11 @@ class SnapshotCollectionRequest(StrictModel):
     symbol: str = Field(min_length=1)
 
 
+class NamedConfigRequest(StrictModel):
+    name: str = Field(min_length=1, max_length=80)
+    config: TradeBrainConfig
+
+
 class CandidateStatisticsRequest(StrictModel):
     quality_score: float | None = None
     net_expectancy_r: float | None = None
@@ -173,6 +178,33 @@ def create_app(
     async def get_config() -> dict[str, object]:
         """Return editable research settings, never credentials."""
         return {"config": runtime_config.model_dump(mode="json")}
+
+    @service.get("/v1/config/saved")
+    async def list_saved_configs(limit: int = 50) -> dict[str, object]:
+        """Return named configuration metadata for the dashboard selector."""
+        if not 1 <= limit <= 100:
+            raise HTTPException(status_code=422, detail="limit must be between 1 and 100")
+        loader = getattr(snapshot_store, "list_saved_configs", None)
+        configs = loader(limit) if callable(loader) else []
+        return {"configs": configs}
+
+    @service.get("/v1/config/saved/{config_id}")
+    async def get_saved_config(config_id: str) -> dict[str, object]:
+        """Return one named configuration for editing."""
+        loader = getattr(snapshot_store, "get_saved_config", None)
+        config = loader(config_id) if callable(loader) else None
+        if config is None:
+            raise HTTPException(status_code=404, detail="Không tìm thấy cấu hình đã lưu.")
+        return {"config": config.model_dump(mode="json")}
+
+    @service.post("/v1/config/saved")
+    async def save_named_config(request: NamedConfigRequest) -> dict[str, object]:
+        """Save a reusable named configuration without exposing credentials."""
+        saver = getattr(snapshot_store, "save_named_config", None)
+        if not callable(saver):
+            raise HTTPException(status_code=503, detail="Kho cấu hình chưa được cấu hình.")
+        metadata = saver(request.name.strip(), request.config)
+        return {"status": "ok", "config": request.config.model_dump(mode="json"), "saved": metadata}
 
     @service.get("/v1/universe/scans")
     async def list_universe_scans(limit: int = 20) -> dict[str, object]:

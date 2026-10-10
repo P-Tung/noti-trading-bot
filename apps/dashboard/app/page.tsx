@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 type Profile = "PROACTIVE" | "BALANCED" | "CAUTIOUS";
 
@@ -248,6 +248,272 @@ function PaginationControls({
   );
 }
 
+type HistoryTab = "decisions" | "snapshots" | "journal" | "queue";
+
+const historyTabLabels: Array<{ id: HistoryTab; label: string; description: string }> = [
+  { id: "decisions", label: "Quyết định", description: "Claude audit" },
+  { id: "snapshots", label: "Snapshots", description: "Dữ liệu thị trường" },
+  { id: "journal", label: "Paper journal", description: "Kết quả mô phỏng" },
+  { id: "queue", label: "Queue audit", description: "Lần quét gần nhất" },
+];
+
+function profileLabel(profile: Profile): string {
+  return profiles.find((item) => item.id === profile)?.label ?? profile;
+}
+
+function statusTone(value: string): "good" | "warn" | "bad" | "info" {
+  const normalized = value.toUpperCase();
+  if (["VALID", "LONG", "SHORT", "CLOSED_TP", "RECOMMENDED"].includes(normalized)) return "good";
+  if (["WAIT", "DEGRADED", "AMBIGUOUS", "OPEN"].includes(normalized)) return "warn";
+  if (["NO_TRADE", "INVALID", "SERVICE_ERROR", "CLOSED_SL"].includes(normalized)) return "bad";
+  return "info";
+}
+
+function StatusBadge({ value }: { value: string }) {
+  return <span className={`history-badge ${statusTone(value)}`}>{value.replaceAll("_", " ")}</span>;
+}
+
+function HistoryWorkspace({
+  selectedProfile,
+  decisions,
+  snapshots,
+  recommendations,
+  lastEvaluation,
+  isLoading,
+  connectionError,
+}: {
+  selectedProfile: Profile;
+  decisions: DecisionRecord[];
+  snapshots: Snapshot[];
+  recommendations: PaperRecommendation[];
+  lastEvaluation: EvaluationSummaryItem[];
+  isLoading: boolean;
+  connectionError: string | null;
+}) {
+  const [activeTab, setActiveTab] = useState<HistoryTab>("decisions");
+  const [search, setSearch] = useState("");
+  const [decisionFilter, setDecisionFilter] = useState("ALL");
+  const [qualityFilter, setQualityFilter] = useState("ALL");
+  const [stateFilter, setStateFilter] = useState("ALL");
+  const [queueFilter, setQueueFilter] = useState("ALL");
+  const [page, setPage] = useState(1);
+  const pageSize = 10;
+  const normalizedSearch = search.trim().toLowerCase();
+  const snapshotSymbolById = useMemo(
+    () => new Map(snapshots.map((snapshot) => [snapshot.snapshot_id, snapshot.symbol])),
+    [snapshots],
+  );
+  const journalStates = useMemo(
+    () => Array.from(new Set(recommendations.map((recommendation) => recommendation.state))).sort(),
+    [recommendations],
+  );
+
+  useEffect(() => {
+    setPage(1);
+  }, [activeTab, search, decisionFilter, qualityFilter, stateFilter, queueFilter, selectedProfile]);
+
+  const filteredDecisions = useMemo(() => decisions.filter((decision) => {
+    if (decision.profile !== selectedProfile) return false;
+    if (decisionFilter !== "ALL" && decision.decision !== decisionFilter) return false;
+    const symbol = snapshotSymbolById.get(decision.snapshot_id) ?? "";
+    return !normalizedSearch || [symbol, decision.snapshot_id, decision.summary_vi, decision.decision]
+      .some((value) => value.toLowerCase().includes(normalizedSearch));
+  }), [decisions, decisionFilter, normalizedSearch, selectedProfile, snapshotSymbolById]);
+
+  const filteredSnapshots = useMemo(() => snapshots.filter((snapshot) => {
+    if (qualityFilter !== "ALL" && snapshot.quality_status !== qualityFilter) return false;
+    return !normalizedSearch || [snapshot.symbol, snapshot.snapshot_id, snapshotFeatureSummary(snapshot)]
+      .some((value) => value.toLowerCase().includes(normalizedSearch));
+  }), [normalizedSearch, qualityFilter, snapshots]);
+
+  const filteredJournal = useMemo(() => recommendations.filter((recommendation) => {
+    if (recommendation.profile !== selectedProfile) return false;
+    if (stateFilter !== "ALL" && recommendation.state !== stateFilter) return false;
+    return !normalizedSearch || [recommendation.symbol ?? "", recommendation.recommendation_id, recommendation.state]
+      .some((value) => value.toLowerCase().includes(normalizedSearch));
+  }), [normalizedSearch, recommendations, selectedProfile, stateFilter]);
+
+  const filteredQueue = useMemo(() => lastEvaluation
+    .filter((item) => {
+      const profileDecisions = item.decisions.filter((decision) => decision.profile === selectedProfile);
+      const hasCandidate = profileDecisions.some((decision) => decision.candidate);
+      if (queueFilter === "CANDIDATE" && !hasCandidate) return false;
+      if (queueFilter === "NO_CANDIDATE" && hasCandidate) return false;
+      return !normalizedSearch || [item.symbol, item.snapshot_id, ...profileDecisions.map((decision) => decision.summary_vi)]
+        .some((value) => value.toLowerCase().includes(normalizedSearch));
+    }), [lastEvaluation, normalizedSearch, queueFilter, selectedProfile]);
+
+  const activeRows = activeTab === "decisions"
+    ? filteredDecisions
+    : activeTab === "snapshots"
+      ? filteredSnapshots
+      : activeTab === "journal"
+        ? filteredJournal
+        : filteredQueue;
+  const pageCount = Math.max(1, Math.ceil(activeRows.length / pageSize));
+  const pageRows = activeRows.slice((page - 1) * pageSize, page * pageSize);
+  const hasFilters = Boolean(normalizedSearch) || decisionFilter !== "ALL" || qualityFilter !== "ALL" || stateFilter !== "ALL" || queueFilter !== "ALL";
+
+  const clearFilters = () => {
+    setSearch("");
+    setDecisionFilter("ALL");
+    setQualityFilter("ALL");
+    setStateFilter("ALL");
+    setQueueFilter("ALL");
+  };
+
+  return (
+    <section className="history-workspace" aria-labelledby="history-heading">
+      <div className="section-heading history-heading">
+        <div>
+          <p className="eyebrow">Historical workspace</p>
+          <h2 id="history-heading">Lịch sử kiểm chứng</h2>
+          <p className="section-subtitle">Lọc, tìm kiếm và xem lại dữ liệu đã lưu theo từng tầng Trade Brain.</p>
+        </div>
+        <span className="history-filter-count">{activeRows.length} / {activeTab === "decisions" ? decisions.length : activeTab === "snapshots" ? snapshots.length : activeTab === "journal" ? recommendations.length : lastEvaluation.length} bản ghi</span>
+      </div>
+
+      <div className="history-tabs" role="tablist" aria-label="Loại lịch sử">
+        {historyTabLabels.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            role="tab"
+            aria-selected={activeTab === tab.id}
+            className={`history-tab ${activeTab === tab.id ? "is-active" : ""}`}
+            onClick={() => setActiveTab(tab.id)}
+          >
+            <strong>{tab.label}</strong>
+            <small>{tab.description}</small>
+          </button>
+        ))}
+      </div>
+
+      <div className="history-toolbar">
+        <label className="history-search">
+          <span>Tìm trong lịch sử</span>
+          <input
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Mã giao dịch, snapshot, nội dung..."
+            type="search"
+          />
+        </label>
+        {activeTab === "decisions" ? (
+          <label className="history-filter">
+            <span>Quyết định</span>
+            <select value={decisionFilter} onChange={(event) => setDecisionFilter(event.target.value)}>
+              <option value="ALL">Tất cả</option>
+              <option value="LONG">LONG</option>
+              <option value="SHORT">SHORT</option>
+              <option value="WAIT">WAIT</option>
+              <option value="NO_TRADE">NO TRADE</option>
+            </select>
+          </label>
+        ) : null}
+        {activeTab === "snapshots" ? (
+          <label className="history-filter">
+            <span>Chất lượng</span>
+            <select value={qualityFilter} onChange={(event) => setQualityFilter(event.target.value)}>
+              <option value="ALL">Tất cả</option>
+              <option value="VALID">VALID</option>
+              <option value="DEGRADED">DEGRADED</option>
+              <option value="AMBIGUOUS">AMBIGUOUS</option>
+              <option value="INVALID">INVALID</option>
+            </select>
+          </label>
+        ) : null}
+        {activeTab === "journal" ? (
+          <label className="history-filter">
+            <span>Trạng thái</span>
+            <select value={stateFilter} onChange={(event) => setStateFilter(event.target.value)}>
+              <option value="ALL">Tất cả</option>
+              {journalStates.map((state) => <option value={state} key={state}>{state.replaceAll("_", " ")}</option>)}
+            </select>
+          </label>
+        ) : null}
+        {activeTab === "queue" ? (
+          <label className="history-filter">
+            <span>Ứng viên</span>
+            <select value={queueFilter} onChange={(event) => setQueueFilter(event.target.value)}>
+              <option value="ALL">Tất cả</option>
+              <option value="CANDIDATE">Có ứng viên</option>
+              <option value="NO_CANDIDATE">Không có ứng viên</option>
+            </select>
+          </label>
+        ) : null}
+        {hasFilters ? <button type="button" className="symbol-action history-clear" onClick={clearFilters}>Xóa lọc</button> : null}
+      </div>
+
+      <div className="history-table-wrap">
+        {pageRows.length === 0 ? (
+          <div className="history-empty">
+            <strong>{isLoading ? "Đang tải dữ liệu..." : connectionError ? "Chưa thể tải lịch sử" : "Chưa có bản ghi phù hợp"}</strong>
+            <span>{connectionError ?? (hasFilters ? "Hãy thử đổi bộ lọc hoặc từ khóa tìm kiếm." : "Dữ liệu sẽ xuất hiện sau lần đánh giá đầu tiên.")}</span>
+          </div>
+        ) : (
+          <table className="history-table">
+            <thead>
+              {activeTab === "decisions" ? <tr><th>Thời gian</th><th>Mã</th><th>Tầng</th><th>Quyết định</th><th>Kiểm tra</th><th>Tóm tắt</th></tr> : null}
+              {activeTab === "snapshots" ? <tr><th>Thời gian</th><th>Mã</th><th>Chế độ</th><th>Chất lượng</th><th>Features</th></tr> : null}
+              {activeTab === "journal" ? <tr><th>Thời gian</th><th>Mã</th><th>Tầng</th><th>Side</th><th>Trạng thái</th><th className="numeric">P&amp;L</th></tr> : null}
+              {activeTab === "queue" ? <tr><th>Mã</th><th>Snapshot</th><th>Cổng máy</th><th>Quyết định</th><th>Lý do</th></tr> : null}
+            </thead>
+            <tbody>
+              {activeTab === "decisions" ? (pageRows as DecisionRecord[]).map((decision) => (
+                <tr key={decision.decision_id}>
+                  <td>{decision.created_at ? formatSnapshotTime(decision.created_at) : "Chưa ghi thời gian"}</td>
+                  <td><strong>{snapshotSymbolById.get(decision.snapshot_id) ?? "Chưa xác định"}</strong><small>{decision.snapshot_id}</small></td>
+                  <td>{profileLabel(decision.profile)}</td>
+                  <td><StatusBadge value={decision.decision} /></td>
+                  <td><StatusBadge value={decision.validation_status} /></td>
+                  <td>{decision.summary_vi}<small>{decision.selected_candidate_id ? `Candidate ${decision.selected_candidate_id}` : "Không chọn candidate"}</small></td>
+                </tr>
+              )) : null}
+              {activeTab === "snapshots" ? (pageRows as Snapshot[]).map((snapshot) => (
+                <tr key={snapshot.snapshot_id}>
+                  <td>{formatSnapshotTime(snapshot.decision_time)}</td>
+                  <td><strong>{snapshot.symbol}</strong><small>{snapshot.snapshot_id}</small></td>
+                  <td>{snapshot.data_mode}</td>
+                  <td><StatusBadge value={snapshot.quality_status} /><small>{Object.keys(snapshot.features ?? {}).length} biến</small></td>
+                  <td>{snapshotFeatureSummary(snapshot)}</td>
+                </tr>
+              )) : null}
+              {activeTab === "journal" ? (pageRows as PaperRecommendation[]).map((recommendation) => (
+                <tr key={recommendation.recommendation_id}>
+                  <td>{formatSnapshotTime(recommendation.emitted_at)}</td>
+                  <td><strong>{recommendation.symbol ?? "Chưa xác định"}</strong><small>{recommendation.recommendation_id}</small></td>
+                  <td>{profileLabel(recommendation.profile)}</td>
+                  <td><StatusBadge value={recommendation.side} /></td>
+                  <td><StatusBadge value={recommendation.state} /><small>Data {recommendation.data_quality}</small></td>
+                  <td className="numeric">{recommendation.net_pnl ?? "Chưa đóng"}</td>
+                </tr>
+              )) : null}
+              {activeTab === "queue" ? (pageRows as EvaluationSummaryItem[]).map((item) => {
+                const profileDecisions = item.decisions.filter((decision) => decision.profile === selectedProfile);
+                return (
+                  <tr key={item.snapshot_id}>
+                    <td><strong>{item.symbol}</strong></td>
+                    <td><small>{item.snapshot_id}</small></td>
+                    <td>{item.eligible_count}/{item.candidate_count}</td>
+                    <td>{profileDecisions.length > 0 ? profileDecisions.map((decision) => <StatusBadge value={decision.decision} key={`${item.snapshot_id}-${decision.profile}`} />) : "Chưa có"}</td>
+                    <td>{profileDecisions.map((decision) => decision.summary_vi).join(" · ") || "Chưa có quyết định"}</td>
+                  </tr>
+                );
+              }) : null}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <div className="history-footer">
+        <span>Đang xem {pageRows.length} bản ghi, tầng {profileLabel(selectedProfile)}</span>
+        <PaginationControls page={Math.min(page, pageCount)} pageCount={pageCount} onChange={setPage} />
+      </div>
+    </section>
+  );
+}
+
 export default function DashboardPage() {
   const [selectedProfile, setSelectedProfile] = useState<Profile>("BALANCED");
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
@@ -258,10 +524,6 @@ export default function DashboardPage() {
   const [globalSetupReport, setGlobalSetupReport] = useState<GlobalReport | null>(null);
   const [evaluationStatus, setEvaluationStatus] = useState<EvaluationStatus | null>(null);
   const [lastEvaluation, setLastEvaluation] = useState<EvaluationSummaryItem[]>([]);
-  const [decisionPage, setDecisionPage] = useState(1);
-  const [snapshotPage, setSnapshotPage] = useState(1);
-  const [journalPage, setJournalPage] = useState(1);
-  const [detailPage, setDetailPage] = useState(1);
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [decisions, setDecisions] = useState<DecisionRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -401,26 +663,6 @@ export default function DashboardPage() {
   }, []);
 
   const isQueueRunning = evaluationStatus?.status === "RUNNING";
-  const selectedDecisionIds = new Set(
-    decisions
-      .filter((decision) => decision.profile === selectedProfile)
-      .map((decision) => decision.snapshot_id),
-  );
-  const filteredSnapshots = snapshots.filter((snapshot) => selectedDecisionIds.has(snapshot.snapshot_id));
-  const filteredRecommendations = recommendations.filter(
-    (recommendation) => recommendation.profile === selectedProfile,
-  );
-  const pageSize = 10;
-  const decisionRows = decisions.filter((decision) => decision.profile === selectedProfile);
-  const decisionPageCount = Math.max(1, Math.ceil(decisionRows.length / pageSize));
-  const snapshotPageCount = Math.max(1, Math.ceil(filteredSnapshots.length / pageSize));
-  const journalPageCount = Math.max(1, Math.ceil(filteredRecommendations.length / pageSize));
-  const detailPageCount = Math.max(1, Math.ceil(lastEvaluation.length / pageSize));
-  const decisionPageRows = decisionRows.slice((decisionPage - 1) * pageSize, decisionPage * pageSize);
-  const snapshotPageRows = filteredSnapshots.slice((snapshotPage - 1) * pageSize, snapshotPage * pageSize);
-  const journalPageRows = filteredRecommendations.slice((journalPage - 1) * pageSize, journalPage * pageSize);
-  const detailPageRows = lastEvaluation.slice((detailPage - 1) * pageSize, detailPage * pageSize);
-
   useEffect(() => {
     const refreshTimer = window.setInterval(() => {
       void loadSnapshots();
@@ -502,10 +744,6 @@ export default function DashboardPage() {
               aria-selected={profile.id === selectedProfile}
               onClick={() => {
                 setSelectedProfile(profile.id);
-                setDecisionPage(1);
-                setSnapshotPage(1);
-                setJournalPage(1);
-                setDetailPage(1);
               }}
             >
               <span>{profile.label}</span>
@@ -513,47 +751,6 @@ export default function DashboardPage() {
             </button>
           ))}
         </div>
-      </section>
-
-      <section className="snapshot-panel" aria-labelledby="decision-heading">
-        <div className="section-heading">
-          <div>
-            <p className="eyebrow">Claude decision audit</p>
-            <h2 id="decision-heading">Quyết định gần nhất của ba tầng</h2>
-          </div>
-          <span className="selected-label">{decisionRows.length} quyết định · {activeProfile.label}</span>
-        </div>
-        {decisionRows.length > 0 ? (
-          <div className="snapshot-list">
-            {decisionPageRows.map((decision) => (
-              <article className="snapshot-row" key={decision.decision_id}>
-                <strong>{profiles.find((profile) => profile.id === decision.profile)?.label ?? decision.profile}</strong>
-                <span>{decision.decision} · {decision.validation_status}</span>
-                <small>
-                  {decision.summary_vi}
-                  {decision.selected_candidate_id ? ` · Candidate ${decision.selected_candidate_id}` : ""}
-                </small>
-                {decision.candidate ? (
-                  <small>
-                    {decision.candidate.strategy} {decision.candidate.entry_stage} · Entry {decision.candidate.entry_estimate}
-                    · SL {decision.candidate.stop_price} · TP {decision.candidate.target_price}
-                    {decision.risk?.quantity_allowed !== undefined
-                      ? ` · Qty ${decision.risk.quantity_allowed}`
-                      : ""}
-                  </small>
-                ) : null}
-                {decision.created_at ? (
-                  <time dateTime={decision.created_at}>{formatSnapshotTime(decision.created_at)}</time>
-                ) : (
-                  <time dateTime={decision.snapshot_id}>Snapshot {decision.snapshot_id}</time>
-                )}
-              </article>
-            ))}
-            <PaginationControls page={decisionPage} pageCount={decisionPageCount} onChange={setDecisionPage} />
-          </div>
-        ) : (
-          <p className="panel-note">Chưa có decision audit. Hãy chạy decision worker sau khi có snapshot.</p>
-        )}
       </section>
 
       <section className="metrics-grid" aria-label="Chỉ số PAPER">
@@ -584,94 +781,15 @@ export default function DashboardPage() {
         </article>
       </section>
 
-      <section className="snapshot-panel" aria-labelledby="snapshot-heading">
-        <div className="section-heading">
-          <div>
-            <p className="eyebrow">Market snapshots</p>
-            <h2 id="snapshot-heading">Dữ liệu gần nhất</h2>
-          </div>
-          <span className="selected-label">{filteredSnapshots.length} snapshot · {activeProfile.label}</span>
-        </div>
-        {filteredSnapshots.length > 0 ? (
-          <div className="snapshot-list">
-            {snapshotPageRows.map((snapshot) => (
-              <article className="snapshot-row" key={snapshot.snapshot_id}>
-                <strong>{snapshot.symbol}</strong>
-                <span>{snapshot.data_mode} · {snapshotQualityLabel(snapshot)}</span>
-                <small>{snapshotFeatureSummary(snapshot)}</small>
-                <time dateTime={snapshot.decision_time}>{formatSnapshotTime(snapshot.decision_time)}</time>
-              </article>
-            ))}
-            <PaginationControls page={snapshotPage} pageCount={snapshotPageCount} onChange={setSnapshotPage} />
-          </div>
-        ) : (
-          <p className="panel-note">
-            {isLoading ? "Đang tải snapshot..." : "Chưa có snapshot cho tầng đang xem."}
-          </p>
-        )}
-      </section>
-
-      <section className="snapshot-panel" aria-labelledby="journal-heading">
-        <div className="section-heading">
-          <div>
-            <p className="eyebrow">Paper journal</p>
-            <h2 id="journal-heading">Recommendation gần nhất</h2>
-          </div>
-          <span className="selected-label">{filteredRecommendations.length} {activeProfile.label}</span>
-        </div>
-        {filteredRecommendations.length > 0 ? (
-          <div className="snapshot-list">
-            {journalPageRows.map((recommendation) => (
-              <article className="snapshot-row" key={recommendation.recommendation_id}>
-                <strong>{recommendation.symbol ?? "Mã chưa xác định"} · {recommendation.side}</strong>
-                <span>
-                  {recommendation.state} · Data {recommendation.data_quality} · Qty {recommendation.quantity}
-                  {recommendation.entry_fill !== null ? ` · Entry ${recommendation.entry_fill}` : ""}
-                  {recommendation.exit_fill !== null ? ` · Exit ${recommendation.exit_fill}` : ""}
-                  {recommendation.funding_pnl !== "0" ? ` · Funding ${recommendation.funding_pnl}` : ""}
-                  {recommendation.net_pnl !== null ? ` · P&L ${recommendation.net_pnl}` : ""}
-                </span>
-                <time dateTime={recommendation.emitted_at}>{formatSnapshotTime(recommendation.emitted_at)}</time>
-              </article>
-            ))}
-            <PaginationControls page={journalPage} pageCount={journalPageCount} onChange={setJournalPage} />
-          </div>
-        ) : (
-          <p className="panel-note">Chưa có paper recommendation.</p>
-        )}
-      </section>
-
-      <section className="snapshot-panel" aria-labelledby="queue-result-heading">
-        <div className="section-heading">
-          <div>
-            <p className="eyebrow">Queue result audit</p>
-            <h2 id="queue-result-heading">Phân tích chi tiết từng mã</h2>
-          </div>
-          <span className="selected-label">{lastEvaluation.length} mã · {activeProfile.label}</span>
-        </div>
-        {lastEvaluation.length > 0 ? (
-          <div className="evaluation-detail-list">
-            {detailPageRows.map((item) => (
-              <article className="evaluation-detail" key={item.snapshot_id}>
-                <div className="evaluation-detail-heading">
-                  <strong>{item.symbol}</strong>
-                  <span>{item.eligible_count}/{item.candidate_count} ứng viên đạt cổng máy</span>
-                </div>
-                {item.decisions.filter((decision) => decision.profile === selectedProfile).map((decision) => (
-                  <div className="evaluation-decision" key={`${item.snapshot_id}-${decision.profile}`}>
-                    <strong>{decision.icon} {decision.decision}</strong>
-                    <span>{decision.summary_vi}</span>
-                    <small>{decision.reasons.join(" · ")}</small>
-                  </div>
-                ))}
-              </article>
-            ))}
-            <PaginationControls page={detailPage} pageCount={detailPageCount} onChange={setDetailPage} />
-          </div>
-        ) : (
-          <p className="panel-note">Chưa có kết quả queue gần nhất.</p>
-        )}
-      </section>
+      <HistoryWorkspace
+        selectedProfile={selectedProfile}
+        decisions={decisions}
+        snapshots={snapshots}
+        recommendations={recommendations}
+        lastEvaluation={lastEvaluation}
+        isLoading={isLoading}
+        connectionError={connectionError}
+      />
 
       <section className="snapshot-panel" aria-labelledby="accounts-heading">
         <div className="section-heading">
