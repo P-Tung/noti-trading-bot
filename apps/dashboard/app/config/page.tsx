@@ -57,10 +57,32 @@ const profileLabels: Record<Profile, string> = {
 };
 
 const strategyLabels: Record<keyof Pick<TradeBrainConfig, "t1" | "t2" | "r1">, string> = {
-  t1: "T1 · Phá vỡ và kiểm tra lại",
-  t2: "T2 · Hồi trong xu hướng",
-  r1: "R1 · Quét biên đi ngang",
+  t1: "T1 · Vượt mốc rồi kiểm tra lại",
+  t2: "T2 · Điều chỉnh rồi đi tiếp",
+  r1: "R1 · Bật lại trong vùng dao động",
 };
+
+const strategyFieldLabels: Record<string, string> = {
+  pivot_left: "Số nến bên trái để tìm mốc giá",
+  pivot_right: "Số nến bên phải để xác nhận mốc giá",
+  breakout_buffer_atr: "Khoảng vượt mốc tối thiểu",
+  min_break_body_ratio: "Thân nến tối thiểu khi vượt mốc",
+  min_break_volume_ratio: "Khối lượng tối thiểu khi vượt mốc",
+  retest_window_bars: "Số nến chờ kiểm tra lại",
+  opposite_penetration_atr: "Mức xuyên ngược cho phép",
+  stop_buffer_atr: "Khoảng đệm cho điểm dừng lỗ",
+  target_r: "Mức chốt lời theo mức rủi ro",
+  ema_period: "Số nến dùng để tính xu hướng",
+  atr_period: "Số nến dùng để tính biên độ giá",
+  pullback_tolerance_atr: "Mức điều chỉnh cho phép",
+  horizon_bars: "Số nến theo dõi kết quả",
+  range_bars: "Số nến dùng để xác định vùng giá",
+  sweep_buffer_atr: "Khoảng vượt biên cho phép",
+};
+
+function strategyFieldLabel(key: string): string {
+  return strategyFieldLabels[key] ?? key.replaceAll("_", " ");
+}
 
 function NumberField({
   label,
@@ -117,7 +139,7 @@ export default function TradeBrainConfigPage() {
         const payload = await response.json() as { config?: TradeBrainConfig; error?: string };
         if (!response.ok || !payload.config) throw new Error(payload.error ?? "Không thể tải cấu hình.");
         setConfig(payload.config);
-        setStatus("Cấu hình hiện tại từ Trade Brain server");
+        setStatus("Đã tải cài đặt hiện tại từ máy chủ");
       })
       .catch((error: unknown) => setStatus(error instanceof Error ? error.message : "Không thể tải cấu hình."));
   }, []);
@@ -188,7 +210,7 @@ export default function TradeBrainConfigPage() {
       if (!savedResponse.ok || !savedPayload.saved) throw new Error(savedPayload.error ?? savedPayload.detail ?? "Đã cập nhật active nhưng chưa lưu được bản đặt tên.");
       setSavedConfigs((current) => [savedPayload.saved!, ...current.filter((item) => item.config_id !== savedPayload.saved!.config_id)]);
       setSelectedSavedConfigId(savedPayload.saved.config_id);
-      setStatus("Đã lưu active và tạo bản cấu hình có tên.");
+      setStatus("Đã lưu và áp dụng cài đặt, đồng thời tạo một bản có tên.");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Không thể lưu cấu hình.");
     } finally {
@@ -200,13 +222,13 @@ export default function TradeBrainConfigPage() {
     if (!configId) return;
     setSelectedSavedConfigId(configId);
     setIsLoadingSavedConfig(true);
-    setStatus("Đang nạp bản cấu hình đã lưu...");
+    setStatus("Đang mở bản cài đặt đã lưu...");
     try {
       const response = await fetch(`/api/config/saved/${encodeURIComponent(configId)}`, { cache: "no-store" });
       const payload = await response.json() as { config?: TradeBrainConfig; error?: string; detail?: string };
       if (!response.ok || !payload.config) throw new Error(payload.error ?? payload.detail ?? "Không thể nạp bản cấu hình.");
       setConfig(payload.config);
-      setStatus("Đã nạp vào form. Bấm Lưu cấu hình để áp dụng active.");
+      setStatus("Đã mở bản cài đặt. Bấm “Lưu và áp dụng cài đặt” để sử dụng.");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Không thể nạp bản cấu hình.");
     } finally {
@@ -218,31 +240,31 @@ export default function TradeBrainConfigPage() {
 
   return (
     <main className="shell config-shell">
-      <a className="back-link" href="/">← Về dashboard</a>
+      <a className="back-link" href="/">← Về trang tổng quan</a>
       <header className="config-header">
         <div>
-          <p className="eyebrow">Trade Brain / Research controls</p>
-          <h1>Hiệu chỉnh Trade Brain</h1>
-          <p className="intro-copy">Điều chỉnh các tham số nghiên cứu theo bộ não V2. Tất cả thay đổi vẫn nằm trong PAPER mode.</p>
+          <p className="eyebrow">TRADE BRAIN V2 / CÀI ĐẶT</p>
+          <h1>Cài đặt cách đánh giá</h1>
+          <p className="intro-copy">Chọn mã giao dịch và điều chỉnh cách hệ thống tìm tín hiệu. Mọi thay đổi chỉ dùng để mô phỏng, không đặt lệnh thật.</p>
         </div>
-        <span className="mode-badge"><span className="status-dot" /> PAPER ONLY</span>
+        <span className="mode-badge"><span className="status-dot" /> CHỈ MÔ PHỎNG</span>
       </header>
 
       <form onSubmit={saveConfig}>
         <section className="config-section">
-          <div className="section-heading"><div><p className="eyebrow">Experiment</p><h2>Chế độ và dữ liệu</h2></div></div>
+          <div className="section-heading"><div><p className="eyebrow">DỮ LIỆU ĐẦU VÀO</p><h2>Mã giao dịch và cách lấy dữ liệu</h2></div></div>
           <div className="config-grid config-grid-wide">
-            <label className="config-field"><span>Phiên bản cấu hình V2</span><input value={config.config_version} readOnly /></label>
-            <label className="config-field"><span>Chọn cấu hình đã lưu</span><select value={selectedSavedConfigId} onChange={(event) => loadSavedConfig(event.target.value)} disabled={isLoadingSavedConfig}>
-              <option value="">Chọn một bản đã lưu...</option>
+            <label className="config-field"><span>Phiên bản cài đặt</span><input value={config.config_version} readOnly /></label>
+            <label className="config-field"><span>Mở cài đặt đã lưu</span><select value={selectedSavedConfigId} onChange={(event) => loadSavedConfig(event.target.value)} disabled={isLoadingSavedConfig}>
+              <option value="">Chọn một bản cài đặt...</option>
               {savedConfigs.map((savedConfig) => <option key={savedConfig.config_id} value={savedConfig.config_id}>{savedConfig.name} · {savedConfig.config_version}</option>)}
             </select></label>
-            <label className="config-field"><span>Tên bản cấu hình khi lưu</span><input value={savedConfigName} maxLength={80} onChange={(event) => setSavedConfigName(event.target.value)} placeholder="Ví dụ: 5 mã phổ biến" /></label>
-            <label className="config-field"><span>Nguồn universe V2</span><select value={config.universe_mode} onChange={(event) => setConfig({ ...config, universe_mode: event.target.value as UniverseMode })}><option value="BINANCE_VOLUME">Binance tự lọc volume ≥ 20 triệu USDT</option><option value="MANUAL">Tự chọn mã thủ công</option></select></label>
-            <NumberField label="Volume tối thiểu 24h, USDT" value={config.universe.min_quote_volume_24h_usdt} step="1000000" min="1" onChange={(value) => setConfig({ ...config, universe: { ...config.universe, min_quote_volume_24h_usdt: value } })} />
-            <NumberField label="Refresh universe, giây" value={config.universe.refresh_seconds} step="60" min="60" onChange={(value) => setConfig({ ...config, universe: { ...config.universe, refresh_seconds: value } })} />
-            <NumberField label="Tuổi tối đa universe, giây" value={config.universe.max_universe_age_seconds} step="60" min="60" onChange={(value) => setConfig({ ...config, universe: { ...config.universe, max_universe_age_seconds: value } })} />
-            <NumberField label="Lịch sử tối thiểu, ngày" value={config.universe.min_history_days} step="1" min="1" onChange={(value) => setConfig({ ...config, universe: { ...config.universe, min_history_days: value } })} />
+            <label className="config-field"><span>Tên bản cài đặt mới</span><input value={savedConfigName} maxLength={80} onChange={(event) => setSavedConfigName(event.target.value)} placeholder="Ví dụ: 5 mã giao dịch phổ biến" /></label>
+            <label className="config-field"><span>Cách chọn mã giao dịch</span><select value={config.universe_mode} onChange={(event) => setConfig({ ...config, universe_mode: event.target.value as UniverseMode })}><option value="BINANCE_VOLUME">Tự lọc mã có giao dịch nhiều trên Binance</option><option value="MANUAL">Tự chọn từ danh sách Binance</option></select></label>
+            <NumberField label="Giá trị giao dịch tối thiểu trong 24 giờ (USDT)" value={config.universe.min_quote_volume_24h_usdt} step="1000000" min="1" onChange={(value) => setConfig({ ...config, universe: { ...config.universe, min_quote_volume_24h_usdt: value } })} />
+            <NumberField label="Khoảng thời gian làm mới danh sách (giây)" value={config.universe.refresh_seconds} step="60" min="60" onChange={(value) => setConfig({ ...config, universe: { ...config.universe, refresh_seconds: value } })} />
+            <NumberField label="Thời gian danh sách được xem là còn mới (giây)" value={config.universe.max_universe_age_seconds} step="60" min="60" onChange={(value) => setConfig({ ...config, universe: { ...config.universe, max_universe_age_seconds: value } })} />
+            <NumberField label="Số ngày dữ liệu cần có" value={config.universe.min_history_days} step="1" min="1" onChange={(value) => setConfig({ ...config, universe: { ...config.universe, min_history_days: value } })} />
             <div className="symbol-picker config-field">
               <span>{config.universe_mode === "BINANCE_VOLUME" ? "Mã tham khảo từ Binance" : "Mã giao dịch, chọn từ Binance"}</span>
               <div className="symbol-dropdown">
@@ -266,45 +288,45 @@ export default function TradeBrainConfigPage() {
                   </div>
                 </div> : null}
               </div>
-              <small className="field-helper">{config.universe_mode === "BINANCE_VOLUME" ? "V2 sẽ tự quét toàn bộ hợp đồng vĩnh cửu USDT TRADING, giữ mã có volume 24h từ 20 triệu USDT, không giới hạn 30 mã." : "Nguồn: Binance USDⓈ-M perpetual, chỉ lấy mã đang ở trạng thái TRADING."}</small>
+              <small className="field-helper">{config.universe_mode === "BINANCE_VOLUME" ? "Hệ thống tự xem xét các hợp đồng vĩnh cửu USDT đang giao dịch và ưu tiên mã có giá trị giao dịch đủ lớn. Không giới hạn số lượng mã." : "Danh sách lấy trực tiếp từ Binance và chỉ gồm các mã đang được giao dịch."}</small>
             </div>
-            <label className="config-field"><span>Chế độ PAPER</span><select value={config.paper_mode} onChange={(event) => setConfig({ ...config, paper_mode: event.target.value as PaperMode })}><option value="RESEARCH_PAPER">RESEARCH_PAPER</option><option value="VERIFIED_PAPER">VERIFIED_PAPER</option></select></label>
-            <NumberField label="Vốn mô phỏng, USDT" value={config.initial_equity_usdt} step="1" min="1" onChange={(value) => setConfig({ ...config, initial_equity_usdt: value })} />
+            <label className="config-field"><span>Chế độ mô phỏng</span><select value={config.paper_mode} onChange={(event) => setConfig({ ...config, paper_mode: event.target.value as PaperMode })}><option value="RESEARCH_PAPER">Nghiên cứu mô phỏng</option><option value="VERIFIED_PAPER">Mô phỏng đã xác minh</option></select></label>
+            <NumberField label="Số vốn mô phỏng (USDT)" value={config.initial_equity_usdt} step="1" min="1" onChange={(value) => setConfig({ ...config, initial_equity_usdt: value })} />
           </div>
-          <p className="config-warning">Không chỉnh `VERIFIED_PAPER` nếu chưa có đủ bằng chứng ngoài mẫu theo tài liệu.</p>
+          <p className="config-warning">Chỉ chọn “Mô phỏng đã xác minh” khi đã có đủ dữ liệu kiểm chứng ngoài mẫu.</p>
         </section>
 
         {(Object.keys(strategyLabels) as Array<"t1" | "t2" | "r1">).map((strategy) => (
           <section className="config-section" key={strategy}>
-            <div className="section-heading"><div><p className="eyebrow">Strategy parameters</p><h2>{strategyLabels[strategy]}</h2></div><span className="selected-label">Tham số nghiên cứu</span></div>
+            <div className="section-heading"><div><p className="eyebrow">CÁCH TÌM TÍN HIỆU</p><h2>{strategyLabels[strategy]}</h2></div><span className="selected-label">Các con số dùng để nhận diện tín hiệu</span></div>
             <div className="config-grid">
               {Object.entries(config[strategy]).map(([key, value]) => (
-                <NumberField key={key} label={key.replaceAll("_", " ")} value={value} onChange={(nextValue) => setConfig(updateStrategy(config, strategy, key, nextValue))} />
+                <NumberField key={key} label={strategyFieldLabel(key)} value={value} onChange={(nextValue) => setConfig(updateStrategy(config, strategy, key, nextValue))} />
               ))}
             </div>
           </section>
         ))}
 
         <section className="config-section">
-          <div className="section-heading"><div><p className="eyebrow">Risk policy</p><h2>Ba tầng khẩu vị và giới hạn cứng</h2></div></div>
+          <div className="section-heading"><div><p className="eyebrow">GIỚI HẠN AN TOÀN</p><h2>Ba cách đánh giá và giới hạn rủi ro</h2></div></div>
           <div className="profile-config-grid">
             {(Object.keys(profileLabels) as Profile[]).map((profile) => {
               const policy = config.profiles[profile];
               return <article className="profile-config-card" key={profile}><h3>{profileLabels[profile]}</h3><div className="config-grid">
                 <NumberField label="Điểm chất lượng tối thiểu" value={policy.quality_minimum} step="1" onChange={(value) => updateProfile(profile, "quality_minimum", value)} />
-                <NumberField label="Expectancy tối thiểu R" value={policy.expectancy_minimum_r} onChange={(value) => updateProfile(profile, "expectancy_minimum_r", value)} />
-                <NumberField label="Mẫu hiệu dụng tối thiểu" value={policy.effective_sample_minimum} step="1" onChange={(value) => updateProfile(profile, "effective_sample_minimum", value)} />
-                <NumberField label="Risk mỗi lệnh, % dạng 0.005" value={policy.risk_per_trade_pct} step="0.0005" onChange={(value) => updateProfile(profile, "risk_per_trade_pct", value)} />
-                <NumberField label="Tổng risk mở" value={policy.max_open_risk_pct} step="0.0005" onChange={(value) => updateProfile(profile, "max_open_risk_pct", value)} />
-                <NumberField label="Risk cùng cụm" value={policy.max_cluster_risk_pct} step="0.0005" onChange={(value) => updateProfile(profile, "max_cluster_risk_pct", value)} />
-                <NumberField label="Dừng lỗ trong ngày" value={policy.daily_drawdown_stop_pct} step="0.001" onChange={(value) => updateProfile(profile, "daily_drawdown_stop_pct", value)} />
-                <NumberField label="Dừng sụt vốn 30 ngày" value={policy.rolling_drawdown_stop_pct} step="0.001" onChange={(value) => updateProfile(profile, "rolling_drawdown_stop_pct", value)} />
+                <NumberField label="Lợi nhuận kỳ vọng tối thiểu (R)" value={policy.expectancy_minimum_r} onChange={(value) => updateProfile(profile, "expectancy_minimum_r", value)} />
+                <NumberField label="Số mẫu tối thiểu để tham khảo" value={policy.effective_sample_minimum} step="1" onChange={(value) => updateProfile(profile, "effective_sample_minimum", value)} />
+                <NumberField label="Mức vốn chấp nhận cho mỗi lệnh (tỷ lệ)" value={policy.risk_per_trade_pct} step="0.0005" onChange={(value) => updateProfile(profile, "risk_per_trade_pct", value)} />
+                <NumberField label="Tổng vốn đang chịu rủi ro (tỷ lệ)" value={policy.max_open_risk_pct} step="0.0005" onChange={(value) => updateProfile(profile, "max_open_risk_pct", value)} />
+                <NumberField label="Rủi ro tối đa trong cùng nhóm mã (tỷ lệ)" value={policy.max_cluster_risk_pct} step="0.0005" onChange={(value) => updateProfile(profile, "max_cluster_risk_pct", value)} />
+                <NumberField label="Mức giảm vốn tối đa trong ngày (tỷ lệ)" value={policy.daily_drawdown_stop_pct} step="0.001" onChange={(value) => updateProfile(profile, "daily_drawdown_stop_pct", value)} />
+                <NumberField label="Mức giảm vốn tối đa trong 30 ngày (tỷ lệ)" value={policy.rolling_drawdown_stop_pct} step="0.001" onChange={(value) => updateProfile(profile, "rolling_drawdown_stop_pct", value)} />
               </div></article>;
             })}
           </div>
         </section>
 
-        <div className="config-actions"><a className="ghost-button config-cancel" href="/">Hủy</a><button className="primary-button" type="submit" disabled={isSaving}>{isSaving ? "Đang lưu..." : "Lưu cấu hình"}</button><span className="action-feedback is-visible" role="status">{status}</span></div>
+        <div className="config-actions"><a className="ghost-button config-cancel" href="/">Quay lại</a><button className="primary-button" type="submit" disabled={isSaving}>{isSaving ? "Đang lưu cài đặt..." : "Lưu và áp dụng cài đặt"}</button><span className="action-feedback is-visible" role="status">{status}</span></div>
       </form>
     </main>
   );

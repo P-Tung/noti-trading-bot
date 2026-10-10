@@ -5,9 +5,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 type Profile = "PROACTIVE" | "BALANCED" | "CAUTIOUS";
 
 const profiles: Array<{ id: Profile; label: string; description: string }> = [
-  { id: "PROACTIVE", label: "Chủ động", description: "Ưu tiên cơ hội sớm" },
-  { id: "BALANCED", label: "Cân bằng", description: "Cân bằng cơ hội và bằng chứng" },
-  { id: "CAUTIOUS", label: "Thận trọng", description: "Chọn lọc và giới hạn rủi ro" },
+  { id: "PROACTIVE", label: "Chủ động", description: "Ưu tiên cơ hội sớm, chấp nhận chờ xác nhận thêm" },
+  { id: "BALANCED", label: "Cân bằng", description: "Cân bằng giữa cơ hội và độ chắc chắn" },
+  { id: "CAUTIOUS", label: "Thận trọng", description: "Chỉ chọn tín hiệu rõ, ưu tiên hạn chế rủi ro" },
 ];
 
 type Snapshot = {
@@ -204,7 +204,50 @@ function formatSnapshotTime(value: string): string {
 
 function snapshotQualityLabel(snapshot: Snapshot): string {
   const featureCount = Object.keys(snapshot.features ?? {}).length;
-  return `${snapshot.quality_status} · ${featureCount} biến`;
+  return `${qualityLabel(snapshot.quality_status)} · ${featureCount} thông số`;
+}
+
+const decisionLabels: Record<string, string> = {
+  LONG: "Có thể mua",
+  SHORT: "Có thể bán",
+  WAIT: "Chờ thêm tín hiệu",
+  NO_TRADE: "Không giao dịch",
+};
+
+const qualityLabels: Record<string, string> = {
+  VALID: "Dữ liệu đủ tốt",
+  DEGRADED: "Dữ liệu còn thiếu",
+  AMBIGUOUS: "Dữ liệu chưa rõ",
+  INVALID: "Dữ liệu không hợp lệ",
+};
+
+const statusLabels: Record<string, string> = {
+  RECOMMENDED: "Được đề xuất",
+  OPEN: "Đang mở",
+  CLOSED_TP: "Đã chốt lời",
+  CLOSED_SL: "Đã dừng lỗ",
+  TIMEOUT: "Hết thời gian theo dõi",
+  VALID: "Đã kiểm tra",
+  INVALID: "Không hợp lệ",
+  SERVICE_ERROR: "Lỗi dịch vụ",
+};
+
+const dataModeLabels: Record<string, string> = {
+  PRICE_ONLY: "Chỉ dữ liệu giá",
+  MIXED: "Dữ liệu giá và giao dịch",
+};
+
+function qualityLabel(value: string): string {
+  return qualityLabels[value.toUpperCase()] ?? value.replaceAll("_", " ");
+}
+
+function statusLabel(value: string): string {
+  const normalized = value.toUpperCase();
+  return decisionLabels[normalized] ?? qualityLabels[normalized] ?? statusLabels[normalized] ?? value.replaceAll("_", " ");
+}
+
+function dataModeLabel(value: string): string {
+  return dataModeLabels[value.toUpperCase()] ?? value.replaceAll("_", " ");
 }
 
 function snapshotFeatureSummary(snapshot: Snapshot): string {
@@ -215,12 +258,12 @@ function snapshotFeatureSummary(snapshot: Snapshot): string {
   const structure = features.structure_state_15m?.value;
   const spread = features.spread_bps?.value;
   const rangePosition = features.range_position_15m?.value;
-  if (typeof close === "number") summary.push(`C ${close}`);
-  if (typeof atr === "number") summary.push(`ATR ${atr}`);
-  if (typeof structure === "string") summary.push(structure);
-  if (typeof spread === "number") summary.push(`Spread ${spread.toFixed(1)} bps`);
-  if (typeof rangePosition === "number") summary.push(`Range ${(rangePosition * 100).toFixed(0)}%`);
-  return summary.join(" · ") || "Chưa có feature tóm tắt";
+  if (typeof close === "number") summary.push(`Giá ${close}`);
+  if (typeof atr === "number") summary.push(`Biên độ ${atr}`);
+  if (typeof structure === "string") summary.push(`Cấu trúc ${structure}`);
+  if (typeof spread === "number") summary.push(`Chênh lệch ${spread.toFixed(1)} điểm cơ bản`);
+  if (typeof rangePosition === "number") summary.push(`Vị trí trong vùng ${(rangePosition * 100).toFixed(0)}%`);
+  return summary.join(" · ") || "Chưa có thông số tóm tắt";
 }
 
 function formatRatio(value: string | null | undefined, emptyLabel: string): string {
@@ -232,18 +275,34 @@ function formatRatio(value: string | null | undefined, emptyLabel: string): stri
 function PaginationControls({
   page,
   pageCount,
+  pageSize,
+  totalRows,
   onChange,
+  onPageSizeChange,
 }: {
   page: number;
   pageCount: number;
+  pageSize: number;
+  totalRows: number;
   onChange: (page: number) => void;
+  onPageSizeChange: (pageSize: number) => void;
 }) {
-  if (pageCount <= 1) return null;
+  const firstRow = totalRows === 0 ? 0 : (page - 1) * pageSize + 1;
+  const lastRow = Math.min(page * pageSize, totalRows);
   return (
-    <div className="pagination" aria-label="Phân trang">
-      <button type="button" className="symbol-action" disabled={page === 1} onClick={() => onChange(page - 1)}>Trước</button>
-      <span>Trang {page}/{pageCount}</span>
-      <button type="button" className="symbol-action" disabled={page === pageCount} onClick={() => onChange(page + 1)}>Sau</button>
+    <div className="pagination" aria-label="Phân trang dữ liệu">
+      <label className="page-size-control">
+        <span>Hiển thị</span>
+        <select value={pageSize} onChange={(event) => onPageSizeChange(Number(event.target.value))}>
+          {[10, 25, 50].map((size) => <option value={size} key={size}>{size} dòng</option>)}
+        </select>
+      </label>
+      <span className="pagination-range">{firstRow}-{lastRow} / {totalRows}</span>
+      <button type="button" className="pagination-icon-button" disabled={page === 1 || pageCount === 0} onClick={() => onChange(1)} aria-label="Về trang đầu" title="Về trang đầu"><span aria-hidden="true">«</span></button>
+      <button type="button" className="pagination-icon-button" disabled={page === 1 || pageCount === 0} onClick={() => onChange(page - 1)} aria-label="Về trang trước" title="Về trang trước"><span aria-hidden="true">‹</span></button>
+      <span>Trang {page} / {Math.max(pageCount, 1)}</span>
+      <button type="button" className="pagination-icon-button" disabled={page === pageCount || pageCount === 0} onClick={() => onChange(page + 1)} aria-label="Về trang sau" title="Về trang sau"><span aria-hidden="true">›</span></button>
+      <button type="button" className="pagination-icon-button" disabled={page === pageCount || pageCount === 0} onClick={() => onChange(pageCount)} aria-label="Đến trang cuối" title="Đến trang cuối"><span aria-hidden="true">»</span></button>
     </div>
   );
 }
@@ -251,10 +310,10 @@ function PaginationControls({
 type HistoryTab = "decisions" | "snapshots" | "journal" | "queue";
 
 const historyTabLabels: Array<{ id: HistoryTab; label: string; description: string }> = [
-  { id: "decisions", label: "Quyết định", description: "Claude audit" },
-  { id: "snapshots", label: "Snapshots", description: "Dữ liệu thị trường" },
-  { id: "journal", label: "Paper journal", description: "Kết quả mô phỏng" },
-  { id: "queue", label: "Queue audit", description: "Lần quét gần nhất" },
+  { id: "decisions", label: "Nhận định", description: "Kết luận của AI" },
+  { id: "snapshots", label: "Dữ liệu thị trường", description: "Thông số lúc quét" },
+  { id: "journal", label: "Lệnh mô phỏng", description: "Kết quả PAPER" },
+  { id: "queue", label: "Lần đánh giá gần nhất", description: "Tiến độ từng mã" },
 ];
 
 function profileLabel(profile: Profile): string {
@@ -270,7 +329,48 @@ function statusTone(value: string): "good" | "warn" | "bad" | "info" {
 }
 
 function StatusBadge({ value }: { value: string }) {
-  return <span className={`history-badge ${statusTone(value)}`}>{value.replaceAll("_", " ")}</span>;
+  return <span className={`history-badge ${statusTone(value)}`}>{statusLabel(value)}</span>;
+}
+
+function QueueProgressPanel({ evaluationStatus }: { evaluationStatus: EvaluationStatus | null }) {
+  const isRunning = evaluationStatus?.status === "RUNNING";
+  const completedCount = evaluationStatus?.completed_count ?? 0;
+  const totalCount = evaluationStatus?.total_count ?? 0;
+  const progress = totalCount > 0 ? Math.min(100, Math.round((completedCount / totalCount) * 100)) : 0;
+  const title = isRunning
+    ? "Đang quét dữ liệu"
+    : evaluationStatus?.status === "FAILED"
+      ? "Lần đánh giá bị gián đoạn"
+      : evaluationStatus?.status === "COMPLETED"
+        ? "Lần đánh giá đã hoàn tất"
+        : "Trạng thái lần đánh giá";
+  const description = isRunning
+    ? `Hệ thống đang kiểm tra mã ${evaluationStatus?.current_symbol ?? "chuẩn bị bắt đầu"}. Bạn có thể theo dõi tiến độ bên dưới.`
+    : evaluationStatus?.status === "FAILED"
+      ? evaluationStatus.error ?? "Không rõ nguyên nhân. Hãy thử đánh giá lại."
+      : evaluationStatus?.status === "COMPLETED"
+        ? `Đã kiểm tra xong ${completedCount} mã trong lần đánh giá gần nhất.`
+        : "Chưa có lần đánh giá nào đang chạy.";
+
+  return (
+    <section className={`queue-progress-panel ${isRunning ? "is-running" : ""}`} aria-live="polite" aria-labelledby="queue-progress-heading">
+      <div className="queue-progress-icon" aria-hidden="true">{isRunning ? "↻" : "✓"}</div>
+      <div className="queue-progress-body">
+        <div className="queue-progress-heading">
+          <div>
+            <p className="eyebrow">TIẾN ĐỘ ĐÁNH GIÁ</p>
+            <h3 id="queue-progress-heading">{title}</h3>
+          </div>
+          <strong>{completedCount}/{totalCount || "-"} mã</strong>
+        </div>
+        <div className="queue-progress-track" aria-label={`Đã hoàn thành ${completedCount} trên ${totalCount} mã`}>
+          <span style={{ width: `${progress}%` }} />
+        </div>
+        <p className="queue-progress-description">{description}</p>
+        {isRunning ? <span className="queue-progress-current">Mã đang xử lý: <strong>{evaluationStatus?.current_symbol ?? "Đang chuẩn bị"}</strong></span> : null}
+      </div>
+    </section>
+  );
 }
 
 function HistoryWorkspace({
@@ -279,6 +379,7 @@ function HistoryWorkspace({
   snapshots,
   recommendations,
   lastEvaluation,
+  evaluationStatus,
   isLoading,
   connectionError,
 }: {
@@ -287,6 +388,7 @@ function HistoryWorkspace({
   snapshots: Snapshot[];
   recommendations: PaperRecommendation[];
   lastEvaluation: EvaluationSummaryItem[];
+  evaluationStatus: EvaluationStatus | null;
   isLoading: boolean;
   connectionError: string | null;
 }) {
@@ -297,7 +399,7 @@ function HistoryWorkspace({
   const [stateFilter, setStateFilter] = useState("ALL");
   const [queueFilter, setQueueFilter] = useState("ALL");
   const [page, setPage] = useState(1);
-  const pageSize = 10;
+  const [pageSize, setPageSize] = useState(10);
   const normalizedSearch = search.trim().toLowerCase();
   const snapshotSymbolById = useMemo(
     () => new Map(snapshots.map((snapshot) => [snapshot.snapshot_id, snapshot.symbol])),
@@ -310,7 +412,7 @@ function HistoryWorkspace({
 
   useEffect(() => {
     setPage(1);
-  }, [activeTab, search, decisionFilter, qualityFilter, stateFilter, queueFilter, selectedProfile]);
+  }, [activeTab, search, decisionFilter, qualityFilter, stateFilter, queueFilter, selectedProfile, pageSize]);
 
   const filteredDecisions = useMemo(() => decisions.filter((decision) => {
     if (decision.profile !== selectedProfile) return false;
@@ -350,7 +452,7 @@ function HistoryWorkspace({
       : activeTab === "journal"
         ? filteredJournal
         : filteredQueue;
-  const pageCount = Math.max(1, Math.ceil(activeRows.length / pageSize));
+  const pageCount = Math.ceil(activeRows.length / pageSize);
   const pageRows = activeRows.slice((page - 1) * pageSize, page * pageSize);
   const hasFilters = Boolean(normalizedSearch) || decisionFilter !== "ALL" || qualityFilter !== "ALL" || stateFilter !== "ALL" || queueFilter !== "ALL";
   const emptyTitle = isLoading
@@ -358,11 +460,13 @@ function HistoryWorkspace({
     : connectionError
       ? "Chưa thể tải lịch sử"
       : activeTab === "journal"
-        ? "Chưa có paper recommendation"
+        ? "Chưa có lệnh mô phỏng"
         : "Chưa có bản ghi phù hợp";
   const emptyDescription = connectionError
-    ?? (activeTab === "journal"
-      ? "Các lần NO_TRADE không tạo paper journal. Hãy xem tab Quyết định hoặc Queue audit để kiểm tra các lần quét này."
+    ?? (isLoading
+      ? "Đang lấy dữ liệu lịch sử từ Trade Brain..."
+      : activeTab === "journal"
+      ? "Các mã không có tín hiệu sẽ không tạo lệnh mô phỏng. Hãy xem tab Nhận định để biết lý do."
       : hasFilters
         ? "Hãy thử đổi bộ lọc hoặc từ khóa tìm kiếm."
         : "Dữ liệu sẽ xuất hiện sau lần đánh giá đầu tiên.");
@@ -379,12 +483,18 @@ function HistoryWorkspace({
     <section className="history-workspace" aria-labelledby="history-heading">
       <div className="section-heading history-heading">
         <div>
-          <p className="eyebrow">Historical workspace</p>
-          <h2 id="history-heading">Lịch sử kiểm chứng</h2>
-          <p className="section-subtitle">Lọc, tìm kiếm và xem lại dữ liệu đã lưu theo từng tầng Trade Brain.</p>
+          <p className="eyebrow">LỊCH SỬ ĐÁNH GIÁ</p>
+          <h2 id="history-heading">Xem lại các lần đánh giá</h2>
+          <p className="section-subtitle">Tìm lại dữ liệu thị trường, nhận định của AI và kết quả mô phỏng.</p>
         </div>
-        <span className="history-filter-count">{activeRows.length} / {activeTab === "decisions" ? decisions.length : activeTab === "snapshots" ? snapshots.length : activeTab === "journal" ? recommendations.length : lastEvaluation.length} bản ghi</span>
+        <span className="history-filter-count">
+          {isLoading
+            ? "Đang tải bản ghi..."
+            : `${activeRows.length} / ${activeTab === "decisions" ? decisions.length : activeTab === "snapshots" ? snapshots.length : activeTab === "journal" ? recommendations.length : lastEvaluation.length} bản ghi phù hợp`}
+        </span>
       </div>
+
+      <QueueProgressPanel evaluationStatus={evaluationStatus} />
 
       <div className="history-tabs" role="tablist" aria-label="Loại lịch sử">
         {historyTabLabels.map((tab) => (
@@ -404,54 +514,54 @@ function HistoryWorkspace({
 
       <div className="history-toolbar">
         <label className="history-search">
-          <span>Tìm trong lịch sử</span>
+          <span>Tìm kiếm</span>
           <input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="Mã giao dịch, snapshot, nội dung..."
+            placeholder="Tìm theo mã, thời gian hoặc nội dung..."
             type="search"
           />
         </label>
         {activeTab === "decisions" ? (
           <label className="history-filter">
-            <span>Quyết định</span>
+            <span>Kết luận</span>
             <select value={decisionFilter} onChange={(event) => setDecisionFilter(event.target.value)}>
               <option value="ALL">Tất cả</option>
-              <option value="LONG">LONG</option>
-              <option value="SHORT">SHORT</option>
-              <option value="WAIT">WAIT</option>
-              <option value="NO_TRADE">NO TRADE</option>
+              <option value="LONG">Có thể mua</option>
+              <option value="SHORT">Có thể bán</option>
+              <option value="WAIT">Chờ thêm tín hiệu</option>
+              <option value="NO_TRADE">Không giao dịch</option>
             </select>
           </label>
         ) : null}
         {activeTab === "snapshots" ? (
           <label className="history-filter">
-            <span>Chất lượng</span>
+            <span>Chất lượng dữ liệu</span>
             <select value={qualityFilter} onChange={(event) => setQualityFilter(event.target.value)}>
               <option value="ALL">Tất cả</option>
-              <option value="VALID">VALID</option>
-              <option value="DEGRADED">DEGRADED</option>
-              <option value="AMBIGUOUS">AMBIGUOUS</option>
-              <option value="INVALID">INVALID</option>
+              <option value="VALID">Dữ liệu đủ tốt</option>
+              <option value="DEGRADED">Dữ liệu còn thiếu</option>
+              <option value="AMBIGUOUS">Dữ liệu chưa rõ</option>
+              <option value="INVALID">Dữ liệu không hợp lệ</option>
             </select>
           </label>
         ) : null}
         {activeTab === "journal" ? (
           <label className="history-filter">
-            <span>Trạng thái</span>
+            <span>Kết quả mô phỏng</span>
             <select value={stateFilter} onChange={(event) => setStateFilter(event.target.value)}>
               <option value="ALL">Tất cả</option>
-              {journalStates.map((state) => <option value={state} key={state}>{state.replaceAll("_", " ")}</option>)}
+              {journalStates.map((state) => <option value={state} key={state}>{statusLabel(state)}</option>)}
             </select>
           </label>
         ) : null}
         {activeTab === "queue" ? (
           <label className="history-filter">
-            <span>Ứng viên</span>
+            <span>Tín hiệu</span>
             <select value={queueFilter} onChange={(event) => setQueueFilter(event.target.value)}>
               <option value="ALL">Tất cả</option>
-              <option value="CANDIDATE">Có ứng viên</option>
-              <option value="NO_CANDIDATE">Không có ứng viên</option>
+              <option value="CANDIDATE">Có tín hiệu</option>
+              <option value="NO_CANDIDATE">Chưa có tín hiệu</option>
             </select>
           </label>
         ) : null}
@@ -467,10 +577,10 @@ function HistoryWorkspace({
         ) : (
           <table className="history-table">
             <thead>
-              {activeTab === "decisions" ? <tr><th>Thời gian</th><th>Mã</th><th>Tầng</th><th>Quyết định</th><th>Kiểm tra</th><th>Tóm tắt</th></tr> : null}
-              {activeTab === "snapshots" ? <tr><th>Thời gian</th><th>Mã</th><th>Chế độ</th><th>Chất lượng</th><th>Features</th></tr> : null}
-              {activeTab === "journal" ? <tr><th>Thời gian</th><th>Mã</th><th>Tầng</th><th>Side</th><th>Trạng thái</th><th className="numeric">P&amp;L</th></tr> : null}
-              {activeTab === "queue" ? <tr><th>Mã</th><th>Snapshot</th><th>Cổng máy</th><th>Quyết định</th><th>Lý do</th></tr> : null}
+              {activeTab === "decisions" ? <tr><th>Thời gian</th><th>Mã</th><th>Cách đánh giá</th><th>Kết luận</th><th>Kiểm tra dữ liệu</th><th>Lý do</th></tr> : null}
+              {activeTab === "snapshots" ? <tr><th>Thời gian</th><th>Mã</th><th>Loại dữ liệu</th><th>Chất lượng</th><th>Thông số đo được</th></tr> : null}
+              {activeTab === "journal" ? <tr><th>Thời gian</th><th>Mã</th><th>Cách đánh giá</th><th>Hướng</th><th>Trạng thái</th><th className="numeric">Lãi/lỗ</th></tr> : null}
+              {activeTab === "queue" ? <tr><th>Mã</th><th>Mã dữ liệu</th><th>Điều kiện đạt</th><th>Kết luận</th><th>Lý do</th></tr> : null}
             </thead>
             <tbody>
               {activeTab === "decisions" ? (pageRows as DecisionRecord[]).map((decision) => (
@@ -480,15 +590,15 @@ function HistoryWorkspace({
                   <td>{profileLabel(decision.profile)}</td>
                   <td><StatusBadge value={decision.decision} /></td>
                   <td><StatusBadge value={decision.validation_status} /></td>
-                  <td>{decision.summary_vi}<small>{decision.selected_candidate_id ? `Candidate ${decision.selected_candidate_id}` : "Không chọn candidate"}</small></td>
+                  <td>{decision.summary_vi}<small>{decision.selected_candidate_id ? `Tín hiệu ${decision.selected_candidate_id}` : "Không có tín hiệu phù hợp"}</small></td>
                 </tr>
               )) : null}
               {activeTab === "snapshots" ? (pageRows as Snapshot[]).map((snapshot) => (
                 <tr key={snapshot.snapshot_id}>
                   <td>{formatSnapshotTime(snapshot.decision_time)}</td>
                   <td><strong>{snapshot.symbol}</strong><small>{snapshot.snapshot_id}</small></td>
-                  <td>{snapshot.data_mode}</td>
-                  <td><StatusBadge value={snapshot.quality_status} /><small>{Object.keys(snapshot.features ?? {}).length} biến</small></td>
+                  <td>{dataModeLabel(snapshot.data_mode)}</td>
+                  <td><StatusBadge value={snapshot.quality_status} /><small>{Object.keys(snapshot.features ?? {}).length} thông số</small></td>
                   <td>{snapshotFeatureSummary(snapshot)}</td>
                 </tr>
               )) : null}
@@ -498,8 +608,8 @@ function HistoryWorkspace({
                   <td><strong>{recommendation.symbol ?? "Chưa xác định"}</strong><small>{recommendation.recommendation_id}</small></td>
                   <td>{profileLabel(recommendation.profile)}</td>
                   <td><StatusBadge value={recommendation.side} /></td>
-                  <td><StatusBadge value={recommendation.state} /><small>Data {recommendation.data_quality}</small></td>
-                  <td className="numeric">{recommendation.net_pnl ?? "Chưa đóng"}</td>
+                  <td><StatusBadge value={recommendation.state} /><small>Dữ liệu: {qualityLabel(recommendation.data_quality)}</small></td>
+                  <td className="numeric">{recommendation.net_pnl ?? "Đang mở"}</td>
                 </tr>
               )) : null}
               {activeTab === "queue" ? (pageRows as EvaluationSummaryItem[]).map((item) => {
@@ -509,7 +619,7 @@ function HistoryWorkspace({
                     <td><strong>{item.symbol}</strong></td>
                     <td><small>{item.snapshot_id}</small></td>
                     <td>{item.eligible_count}/{item.candidate_count}</td>
-                    <td>{profileDecisions.length > 0 ? profileDecisions.map((decision) => <StatusBadge value={decision.decision} key={`${item.snapshot_id}-${decision.profile}`} />) : "Chưa có"}</td>
+                    <td>{profileDecisions.length > 0 ? profileDecisions.map((decision) => <StatusBadge value={decision.decision} key={`${item.snapshot_id}-${decision.profile}`} />) : "Chưa có kết luận"}</td>
                     <td>{profileDecisions.map((decision) => decision.summary_vi).join(" · ") || "Chưa có quyết định"}</td>
                   </tr>
                 );
@@ -520,8 +630,18 @@ function HistoryWorkspace({
       </div>
 
       <div className="history-footer">
-        <span>Đang xem {pageRows.length} bản ghi, tầng {profileLabel(selectedProfile)}</span>
-        <PaginationControls page={Math.min(page, pageCount)} pageCount={pageCount} onChange={setPage} />
+        <span>{isLoading ? "Đang tải dữ liệu lịch sử..." : `Đang xem ${pageRows.length} dòng trong ${activeRows.length} bản ghi, cách đánh giá ${profileLabel(selectedProfile)}`}</span>
+        <PaginationControls
+          page={Math.min(page, Math.max(pageCount, 1))}
+          pageCount={pageCount}
+          pageSize={pageSize}
+          totalRows={activeRows.length}
+          onChange={setPage}
+          onPageSizeChange={(nextPageSize) => {
+            setPageSize(nextPageSize);
+            setPage(1);
+          }}
+        />
       </div>
     </section>
   );
@@ -609,24 +729,24 @@ export default function DashboardPage() {
   );
   const dashboardMetrics = [
     {
-      label: "Tỷ lệ lời ròng",
+      label: "Tỷ lệ kết quả dương",
       value: formatRatio(activeReport?.net_positive_rate, "Chưa đủ 100 mẫu"),
-      helper: activeReport?.cohort_status ?? `Cohort ${activeProfile.label} chưa khóa`,
+      helper: activeReport?.cohort_status ?? `Chưa đủ mẫu của cách ${activeProfile.label.toLowerCase()}`,
     },
     {
-      label: "Net P&L",
+      label: "Lãi/lỗ mô phỏng",
       value: activeReport?.total_net_pnl ?? "Chưa đủ dữ liệu",
-      helper: "Paper result sau chi phí",
+      helper: "Sau phí mô phỏng",
     },
     {
-      label: "Sụt vốn lớn nhất",
+      label: "Mức giảm vốn lớn nhất",
       value: formatRatio(activeReport?.max_drawdown, "Chưa đủ dữ liệu"),
-      helper: `Cohort ${activeProfile.label}`,
+      helper: `Cách đánh giá ${activeProfile.label}`,
     },
     {
-      label: "Mốc báo cáo",
+      label: "Tiến độ báo cáo",
       value: `${activeReport?.recommendation_count ?? 0} / 100`,
-      helper: `${activeCompletedReport?.closed_count ?? 0} trade đã đóng xác định`,
+      helper: `${activeCompletedReport?.closed_count ?? 0} lệnh đã có kết quả`,
     },
   ];
 
@@ -695,7 +815,7 @@ export default function DashboardPage() {
           </span>
         </a>
         <div className="topbar-actions">
-          <span className="mode-badge"><span className="status-dot" /> PAPER MODE</span>
+          <span className="mode-badge"><span className="status-dot" /> CHỈ MÔ PHỎNG</span>
           <button
             className="primary-button"
             type="button"
@@ -709,13 +829,13 @@ export default function DashboardPage() {
             {isQueueRunning
               ? `🔄 Đang quét ${evaluationStatus?.current_index ?? 0}/${evaluationStatus?.total_count ?? 0}: ${evaluationStatus?.current_symbol ?? "đang chuẩn bị"}`
               : evaluationStatus?.status === "FAILED"
-                ? `Queue lỗi: ${evaluationStatus.error ?? "không rõ nguyên nhân"}`
-                : "Queue sẵn sàng"}
+                ? `Lần đánh giá lỗi: ${evaluationStatus.error ?? "không rõ nguyên nhân"}`
+                : "Sẵn sàng đánh giá"}
           </span>
           <button className="ghost-button" type="button" onClick={() => void loadSnapshots()} disabled={isLoading}>
-            {isLoading ? "Đang tải..." : "Đồng bộ dữ liệu"}
+            {isLoading ? "Đang tải..." : "Tải lại dữ liệu"}
           </button>
-          <a className="ghost-button config-link" href="/config">Cấu hình Trade Brain</a>
+          <a className="ghost-button config-link" href="/config">Cài đặt cách đánh giá</a>
           <span className={`action-feedback ${evaluationMessage ? "is-visible" : ""}`} role="status" aria-live="polite">
             {evaluationMessage ?? ""}
           </span>
@@ -724,30 +844,30 @@ export default function DashboardPage() {
 
       <section className="intro" id="top">
         <div>
-          <p className="eyebrow">Bộ não Trade V2 / Tổng quan</p>
-          <h1>Kiểm chứng trước khi xuống tiền.</h1>
+          <p className="eyebrow">TRADE BRAIN V2 / TỔNG QUAN</p>
+          <h1>Hiểu tín hiệu trước khi quyết định.</h1>
           <p className="intro-copy">
-            Theo dõi quyết định của Claude, kết quả mô phỏng và bằng chứng thống kê trong cùng một nơi.
+            Xem tín hiệu mua hoặc bán, kết quả mô phỏng và lý do hệ thống đưa ra từng nhận định.
           </p>
         </div>
         <div className="health-card" aria-label="Trạng thái hệ thống">
           <span className="health-label">Hệ thống</span>
           <strong>
-            {connectionError ? "Chưa kết nối Trade Brain" : health?.real_money_enabled === false ? "Chỉ PAPER" : "Đang kiểm tra"}
+            {connectionError ? "Chưa kết nối hệ thống" : health?.real_money_enabled === false ? "Chỉ mô phỏng, chưa đặt lệnh thật" : "Đang kiểm tra"}
           </strong>
-          <span>{connectionError ?? "Không có đường đặt lệnh thật. Snapshot chỉ đọc và paper mode."}</span>
+          <span>{connectionError ?? "Dữ liệu chỉ dùng để phân tích. Hệ thống không tự mua hoặc bán bằng tiền thật."}</span>
         </div>
       </section>
 
       <section className="profile-section" aria-labelledby="profile-heading">
         <div className="section-heading">
           <div>
-            <p className="eyebrow">Ba chính sách độc lập</p>
-            <h2 id="profile-heading">Chọn tầng để xem</h2>
+            <p className="eyebrow">BA CÁCH ĐÁNH GIÁ TÍN HIỆU</p>
+            <h2 id="profile-heading">Chọn cách hệ thống đánh giá cơ hội</h2>
           </div>
           <span className="selected-label">Đang xem: {activeProfile.label}</span>
         </div>
-        <div className="profile-tabs" role="tablist" aria-label="Tầng khẩu vị">
+        <div className="profile-tabs" role="tablist" aria-label="Cách đánh giá tín hiệu">
           {profiles.map((profile) => (
             <button
               className={`profile-tab ${profile.id === selectedProfile ? "is-active" : ""}`}
@@ -766,7 +886,7 @@ export default function DashboardPage() {
         </div>
       </section>
 
-      <section className="metrics-grid" aria-label="Chỉ số PAPER">
+      <section className="metrics-grid" aria-label="Kết quả mô phỏng">
         {dashboardMetrics.map((metric) => (
           <article className="metric-card" key={metric.label}>
             <span>{metric.label}</span>
@@ -776,21 +896,21 @@ export default function DashboardPage() {
         ))}
       </section>
 
-      <section className="metrics-grid report-context" aria-label="Ngữ cảnh báo cáo">
+      <section className="metrics-grid report-context" aria-label="Thông tin kết quả">
         <article className="metric-card">
-          <span>Cohort {activeProfile.label}</span>
+          <span>Kết quả của cách {activeProfile.label.toLowerCase()}</span>
           <strong>{activeReport?.recommendation_count ?? 0} đề xuất</strong>
-          <small>{activeReport?.cohort_status ?? "Chưa khóa cohort"}</small>
+          <small>{activeReport?.cohort_status ?? "Chưa đủ mẫu để kết luận"}</small>
         </article>
         <article className="metric-card">
           <span>Kết quả đã đóng</span>
-          <strong>{activeCompletedReport?.closed_count ?? 0} trade</strong>
-          <small>Chỉ tính lệnh có kết quả xác định</small>
+          <strong>{activeCompletedReport?.closed_count ?? 0} lệnh</strong>
+          <small>Chỉ tính lệnh mô phỏng đã có kết quả</small>
         </article>
         <article className="metric-card">
-          <span>Setup chung</span>
-          <strong>{globalSetupReport?.recommendation_count ?? 0} setup</strong>
-          <small>Đếm setup_id khác nhau giữa các tầng</small>
+          <span>Tín hiệu chung</span>
+          <strong>{globalSetupReport?.recommendation_count ?? 0} tín hiệu</strong>
+          <small>Không đếm trùng giữa các cách đánh giá</small>
         </article>
       </section>
 
@@ -800,6 +920,7 @@ export default function DashboardPage() {
         snapshots={snapshots}
         recommendations={recommendations}
         lastEvaluation={lastEvaluation}
+        evaluationStatus={evaluationStatus}
         isLoading={isLoading}
         connectionError={connectionError}
       />
@@ -807,17 +928,17 @@ export default function DashboardPage() {
       <section className="snapshot-panel" aria-labelledby="accounts-heading">
         <div className="section-heading">
           <div>
-            <p className="eyebrow">Independent paper ledgers</p>
-            <h2 id="accounts-heading">Ba sổ vốn PAPER</h2>
+            <p className="eyebrow">TÀI KHOẢN MÔ PHỎNG ĐỘC LẬP</p>
+            <h2 id="accounts-heading">Ba tài khoản mô phỏng</h2>
           </div>
-          <span className="selected-label">{accounts.length} profiles</span>
+          <span className="selected-label">{accounts.length} cách đánh giá</span>
         </div>
         <div className="snapshot-list">
           {accounts.map((account) => (
               <article className="snapshot-row" key={account.profile}>
-                <strong>{account.profile}</strong>
-                <span>Equity {account.mark_to_market_equity} USDT</span>
-                <span>P&L {account.realized_pnl} USDT</span>
+                <strong>{profileLabel(account.profile)}</strong>
+                <span>Số dư mô phỏng {account.mark_to_market_equity} USDT</span>
+                <span>Lãi/lỗ {account.realized_pnl} USDT</span>
             </article>
           ))}
         </div>
@@ -826,16 +947,15 @@ export default function DashboardPage() {
       <section className="empty-panel" aria-labelledby="empty-heading">
         <div className="empty-icon" aria-hidden="true">01</div>
         <div>
-          <p className="eyebrow">Chưa có khuyến nghị</p>
-          <h2 id="empty-heading">Bắt đầu từ nền dữ liệu sạch</h2>
+          <p className="eyebrow">CHƯA CÓ KẾT QUẢ ĐÁNH GIÁ</p>
+          <h2 id="empty-heading">Bắt đầu bằng một lần đánh giá</h2>
           <p>
-            Khi worker lấy được snapshot đầu tiên, trang này sẽ hiển thị candidate, quyết định, giá mô phỏng,
-            chi phí và trạng thái của tầng {activeProfile.label}.
+            Bấm “Đánh giá ngay” để lấy dữ liệu mới nhất, nhận diện tín hiệu và xem kết quả mô phỏng của cách {activeProfile.label.toLowerCase()}.
           </p>
           <div className="empty-checklist" aria-label="Các bước cần hoàn tất">
-            <span><b>1</b> Kết nối Binance public data</span>
-            <span><b>2</b> Lưu snapshot vào Supabase</span>
-            <span><b>3</b> Chạy paper recommendation</span>
+            <span><b>1</b> Nhận dữ liệu công khai từ Binance</span>
+            <span><b>2</b> Lưu dữ liệu vào lịch sử</span>
+            <span><b>3</b> Tạo nhận định mô phỏng</span>
           </div>
         </div>
       </section>
